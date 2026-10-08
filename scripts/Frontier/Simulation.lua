@@ -444,6 +444,18 @@ function Sim:GateStep()
     end
 end
 
+-- 周围单位密度：越小越空旷。用于让拥堵单位朝人少的方向流动。
+function Sim:CrowdDensity(x, y, u, radius)
+    local count = 0
+    local r2 = radius * radius
+    for _, v in ipairs(self.units) do
+        if v ~= u and self:Active(v) then
+            if (v.x - x)^2 + (v.y - y)^2 < r2 then count = count + 1 end
+        end
+    end
+    return count
+end
+
 function Sim:Move(u, tx, ty, dt)
     local t = C.units[u.kind]
     local offset = (u.size - 1) * 0.5
@@ -464,9 +476,10 @@ function Sim:Move(u, tx, ty, dt)
     end
     if u.repath <= 0 or u.pathVersion ~= self.grid.version or gx ~= u.goalX or gy ~= u.goalY then
         local path = nil ---@type table[]?
-        -- 营地内普通单位按"直线 + 横线"的最短 L 形折线行军，方向确定；
-        -- 折线被建筑挡住、或大体型需要硬化路时，回退到 A*。
-        if u.x < C.wallCol - 0.5 and u.size == 1 then path = self.grid:LRoute(sx, sy, gx, gy) end
+        -- 营地内普通单位按"直线 + 横线"的最短 L 形折线行军，方向确定。
+        if u.x < C.wallCol - 0.5 and u.size == 1 then
+            path = self.grid:LRoute(sx, sy, gx, gy)
+        end
         if not path and u.team == "ally" and u.size == 2 then
             path = self.grid:Path(sx, sy, gx, gy, u.size, true)
         end
@@ -499,16 +512,28 @@ function Sim:Move(u, tx, ty, dt)
     else
         u.blocked = u.blocked + dt
         u.state = "拥堵排队"
-        -- 延迟后尝试左右侧向超车，不瞬移，不忽略障碍；窄路自然失败。
-        if u.blocked > 0.6 and u.gateSlots == 0 then
-            local side = (u.id % 2 == 0) and 1 or -1
-            for _, sign in ipairs({ side, -side }) do
-                local ax, ay = u.x - dy / dist * step * sign, u.y + dx / dist * step * sign
+        -- 密度梯度绕行：在几个候选方向里挑一个既能走、又最空旷的，
+        -- 单位会自然朝人少的地方流动，而不是原地抖动或继续往人堆里挤。
+        if u.blocked > 0.35 and u.gateSlots == 0 then
+            local fx, fy = dx / dist, dy / dist
+            local lx, ly = -fy, fx
+            local candidates = {
+                { fx, fy, 0 }, { fx * 0.7 + lx, fy * 0.7 + ly, 1 }, { fx * 0.7 - lx, fy * 0.7 - ly, 1 },
+                { lx, ly, 1 }, { -lx, -ly, 1 }, { fx * 0.4 + lx * 1.2, fy * 0.4 + ly * 1.2, 1 },
+                { fx * 0.4 - lx * 1.2, fy * 0.4 - ly * 1.2, 1 },
+            }
+            local bestX, bestY, bestScore = nil, nil, math.huge
+            for _, c in ipairs(candidates) do
+                local len = math.sqrt(c[1] * c[1] + c[2] * c[2])
+                local ax, ay = u.x + c[1] / len * step, u.y + c[2] / len * step
                 if self:PositionClear(u, ax, ay) then
-                    u.x, u.y, u.moving = ax, ay, true
-                    u.repath = 0
-                    break
+                    -- 主要看密度，其次轻微偏好继续前进的方向。
+                    local score = self:CrowdDensity(ax, ay, u, 1.3) * 2 + c[3] * 0.35
+                    if score < bestScore then bestX, bestY, bestScore = ax, ay, score end
                 end
+            end
+            if bestX then
+                u.x, u.y, u.moving = bestX, bestY, true
             end
         end
     end
@@ -548,6 +573,26 @@ function Sim:ChooseResource(u)
             end
             local s = dist + nearby * 3.2 - r.tier * 0.2
             if s < score then best, score = r, s end
+        end
+    end
+    return best
+end
+
+-- 出兵点分散：优先选离已有同伴最远的候选格，避免新兵和旧部队叠在出口。
+function Sim:PickSpawn(candidates, size)
+    local best, bestClear = nil, -1
+    for _, spot in ipairs(candidates) do
+        local x, y = spot.x + (size-1)*0.5, spot.y + (size-1)*0.5
+        local probe = { size = size } --[[@as FrontierUnit]]
+        if self:PositionClear(probe, x, y) then
+            local clearance = math.huge
+            for _, v in ipairs(self.units) do
+                if self:Active(v) and v.team == "ally" then
+                    local d = (v.x-x)^2 + (v.y-y)^2
+                    if d < clearance then clearance = d end
+                end
+            end
+            if clearance > bestClear then best, bestClear = spot, clearance end
         end
     end
     return best
@@ -680,16 +725,12 @@ function Sim:Production(dt)
                     if b.stock < 5 then b.stock, b.timer = b.stock + 1, 0 end
                 elseif def.unit and self:ArmyCount() < C.armyLimit then
                     local size = C.units[def.unit].size
-                    for _, spot in ipairs(self.grid:SpawnSpot(b, size)) do
-                        local probe = { size = size } --[[@as FrontierUnit]]
-                        local x, y = spot.x + (size-1)*0.5, spot.y + (size-1)*0.5
-                        if self:PositionClear(probe, x, y) then
-                            self:AddUnit(def.unit, "ally", x, y)
-                            self.produced = self.produced + 1
-                            b.timer = 0
-                            if self.produced <= 5 or self.produced % 10 == 0 then print("[生产] " .. def.name .. "产出，累计" .. self.produced) end
-                            break
-                        end
+                    local spot = self:PickSpawn(self.grid:SpawnSpot(b, size), size)
+                    if spot then
+                        self:AddUnit(def.unit, "ally", spot.x + (size-1)*0.5, spot.y + (size-1)*0.5)
+                        self.produced = self.produced + 1
+                        b.timer = 0
+                        if self.produced <= 5 or self.produced % 10 == 0 then print("[生产] " .. def.name .. "产出，累计" .. self.produced) end
                     end
                 end
             end

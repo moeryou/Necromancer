@@ -13,11 +13,15 @@
     "screen_orientation": "landscape",
     "collection_type": "sce",
     "trial_note": "",
-    "app_platforms": "1,2"
+    "app_platforms": "1,2",
+    "developer_id": 470085
   },
   "assets": {
     "icon": "",
     "screenshots": [],
     "promotional_image": ""
+  },
+  "metadata": {
+    "updated_at": "2026-10-08T14:18:55.556Z"
   }
 }

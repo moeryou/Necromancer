@@ -238,7 +238,9 @@ function Grid:Path(sx, sy, tx, ty, size, strictLarge)
 end
 
 -- 营地内单位不走 A*，而是按"直线 + 横线"的最短 L 形折线走向城门。
--- 两条折线取踩踏代价更低的一条，方向确定，不做随机游走。
+-- 折线有两种走法：先横后竖（沿自己所在行前进，最后在城门附近并线），
+-- 以及先竖后横（先并到城门行，再整条队伍挤过去）。
+-- 略微偏好前者，让不同行的部队各自成列前进，只在城门口汇合，缓解拥堵。
 -- 若折线被建筑挡住则返回 nil，由调用方回退到 A*。
 function Grid:LCost(x1, y1, x2, y2)
     local cost = 0
@@ -248,7 +250,9 @@ function Grid:LCost(x1, y1, x2, y2)
 end
 
 function Grid:LRoute(sx, sy, tx, ty)
-    local horizontalFirst = self:LCost(sx, sy, tx, ty) <= self:LCost(sx, sy, sx, ty) + 0.0001
+    local hFirst = self:LCost(sx, sy, tx, sy) + self:LCost(tx, sy, tx, ty)
+    local vFirst = self:LCost(sx, sy, sx, ty) + self:LCost(sx, ty, tx, ty)
+    local horizontalFirst = hFirst <= vFirst + 1.2
     local cells, x, y = {}, sx, sy
     local function step(nx, ny)
         if not self:IsWalkable(nx, ny) then return false end
