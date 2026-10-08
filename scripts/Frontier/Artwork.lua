@@ -53,14 +53,32 @@ function Art.Polygon(vg, points, color)
     nvgFill(vg)
 end
 
-function Art.Rock(vg, x, y, s, seed)
+-- 踩踏痕迹：等级越高，土色越实、车辙越深。
+function Art.Trail(vg, x, y, s, level, seed)
     local k = ((seed * 37) % 17) / 17
-    Art.Ellipse(vg, x+s*0.53, y+s*0.78, s*0.35, s*0.13, { 40, 50, 37, 70 })
-    Art.Polygon(vg, { x+s*.14,y+s*.65, x+s*.23,y+s*.30, x+s*.51,y+s*(.18+k*.08),
-        x+s*.77,y+s*.38, x+s*.85,y+s*.70, x+s*.47,y+s*.81 }, { 132, 140, 116, 255 })
-    Art.Polygon(vg, { x+s*.23,y+s*.30, x+s*.51,y+s*.18, x+s*.58,y+s*.54, x+s*.14,y+s*.65 }, { 161, 164, 139, 255 })
-    Art.Polygon(vg, { x+s*.58,y+s*.54, x+s*.77,y+s*.38, x+s*.85,y+s*.70, x+s*.47,y+s*.81 }, { 110, 122, 102, 255 })
-    Art.Line(vg, x+s*.30,y+s*.37,x+s*.44,y+s*.31,{ 190, 188, 161, 180 },1)
+    if level == 1 then
+        Art.Rect(vg,x+s*.12,y+s*.14,s*.76,s*.72,{ 156, 142, 100, 74 },2)
+        Art.Circle(vg,x+s*.33,y+s*.4,1,{ 146, 133, 94, 120 })
+        Art.Circle(vg,x+s*.7,y+s*.66,1,{ 146, 133, 94, 120 })
+    elseif level == 2 then
+        Art.Rect(vg,x+s*.05,y+s*.06,s*.9,s*.88,{ 172, 152, 108, 255 },2)
+        Art.Rect(vg,x+s*.1,y+s*.1,s*.8,s*.8,{ 183, 162, 116, 255 },1)
+        Art.Line(vg,x+s*.2,y+s*.34+k*.1,x+s*.82,y+s*.34+k*.1,{ 143, 126, 90, 140 },1)
+        Art.Line(vg,x+s*.2,y+s*.68-k*.1,x+s*.82,y+s*.68-k*.1,{ 143, 126, 90, 140 },1)
+    elseif level == 3 then
+        Art.Rect(vg,x,y,s,s,{ 166, 170, 148, 255 },2)
+        Art.Rect(vg,x+1,y+1,s-2,s-2,{ 176, 179, 157, 255 },1)
+        Art.Line(vg,x+s*.5,y+3,x+s*.5,y+s-3,{ 134, 148, 136, 120 },1)
+        Art.Line(vg,x+3,y+s*.5,x+s-3,y+s*.5,{ 134, 148, 136, 120 },1)
+        Art.Circle(vg,x+s*.28,y+s*.3,1.2,{ 148, 152, 132, 200 })
+        Art.Circle(vg,x+s*.74,y+s*.72,1.2,{ 148, 152, 132, 200 })
+    else
+        Art.Rect(vg,x,y,s,s,{ 178, 184, 164, 255 },2)
+        Art.Rect(vg,x+1,y+1,s-2,s-2,{ 190, 196, 176, 255 },1)
+        Art.Line(vg,x+s*.5,y+2,x+s*.5,y+s-2,{ 150, 176, 168, 130 },1)
+        Art.Line(vg,x+2,y+s*.5,x+s-2,y+s*.5,{ 150, 176, 168, 130 },1)
+        Art.Polygon(vg,{ x+s*.32,y+s*.32,x+s*.7,y+s*.5,x+s*.32,y+s*.68 },{ 232, 216, 148, 235 })
+    end
 end
 
 function Art.Tree(vg, x, y, s)

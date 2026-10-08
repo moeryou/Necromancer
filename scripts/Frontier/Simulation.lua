@@ -28,7 +28,6 @@ local Grid = require "Frontier.Grid"
 ---@field ticket number
 ---@field gateLane number
 ---@field gateSlots number
----@field boost number
 ---@field facing number
 ---@field moving boolean
 ---@field flash number
@@ -99,6 +98,9 @@ local Grid = require "Frontier.Grid"
 ---@field revision number
 ---@field diagnosticTimer number
 ---@field bossSeen boolean
+---@field roadTimer number
+---@field roadProgress number
+---@field roadLevelValue number
 local Sim = {}
 Sim.__index = Sim
 
@@ -116,6 +118,7 @@ function Sim:Init()
     self.shots = {} ---@type FrontierShot[]
     self.effects = {} ---@type FrontierEffect[]
     self.gold, self.tech, self.techLevel = C.startGold, 0, 0
+    self.grid.techLevel = 0
     self.wallHp = C.wallHealth
     self.phase, self.phaseTime, self.wave = "develop", C.developTime, 1
     self.waveQueue = {} ---@type string[]
@@ -124,9 +127,10 @@ function Sim:Init()
     self.time, self.paused, self.speed = 0, false, 1
     self.nextUnit, self.nextTicket = 1, 1
     self.kills, self.collected, self.converted, self.produced = 0, 0, 0, 0
-    self.notice = "首座民兵营已就绪。清岩铺路，让生产线通向城门。"
+    self.notice = "首座民兵营已就绪。让部队在营地与城门之间反复行军，道路会自己长出来。"
     self.noticeTime, self.gateUsed, self.blockedCount, self.revision = 8, 0, 0, 1
     self.diagnosticTimer, self.bossSeen = 0, false
+    self.roadTimer, self.roadProgress, self.roadLevelValue = 0, 0, 0
     self:RefreshResources()
     print("[游戏] 单机初始化，90秒发育，3波普通敌军后直接进入Boss战")
 end
@@ -160,7 +164,7 @@ function Sim:AddUnit(kind, team, x, y, neutral)
         path = {}, pathVersion = 0, goalX = -1, goalY = -1, repath = 0, blocked = 0,
         state = "行军", upgraded = kind ~= "militia", returning = false, resourceId = 0,
         harvest = 0, commandVersion = 0, passedGate = team ~= "ally", ticket = 0,
-        gateLane = 0, gateSlots = 0, boost = 0, facing = team == "ally" and 1 or -1,
+        gateLane = 0, gateSlots = 0, facing = team == "ally" and 1 or -1,
         moving = false, flash = 0, neutral = neutral or false, active = true,
         homeX = x, homeY = y }
     self.nextUnit = self.nextUnit + 1
@@ -206,9 +210,6 @@ function Sim:Perform(tool, x, y)
         self:Notify(def.name .. "建造完成；路径已重新计算")
         return true
     end
-    if tool == "boost" and self.techLevel < 3 then self:Notify("需要研发加速通道"); return false end
-    local cost = tool == "clear" and C.clearCost or tool == "boost" and C.boostCost or C.roadCost
-    if tool ~= "erase" and self.gold < cost then self:Notify("基础资源不足"); return false end
     local ok, text, price = self.grid:Edit(tool, x, y)
     if not ok then self:Notify(text); return false end
     self.gold = self.gold - price
@@ -223,6 +224,7 @@ function Sim:Upgrade()
     if self.tech < C.techCosts[nextLevel] then self:Notify("科技资源不足：采集中立深区或击退波次"); return end
     self.tech = self.tech - C.techCosts[nextLevel]
     self.techLevel = nextLevel
+    self.grid.techLevel = nextLevel
     self.grid.version = self.grid.version + 1
     self:Notify("研发完成：" .. C.techNames[nextLevel])
 end
@@ -370,9 +372,9 @@ end
 -- 城门：3行可通行位；按票据先到先得，普通占1、大象占2，不可超配。
 function Sim:CollisionRadius(u, x, y)
     if u.size == 2 then return 0.87 end
-    local cell = self.grid:Get(math.floor(x + 0.5), math.floor(y + 0.5))
-    -- 拓宽只改变道路上的通行密度，不给城外单位额外数值优势。
-    return self.techLevel >= 2 and cell and cell.terrain == "road" and 0.24 or 0.36
+    -- 拓宽只提升道路上的通行密度：踩踏达到土路及以上才生效。
+    if self.techLevel >= 2 and self.grid:TrailLevel(x, y) >= 2 then return 0.24 end
+    return 0.36
 end
 
 function Sim:PositionClear(u, x, y, relaxed)
@@ -462,7 +464,12 @@ function Sim:Move(u, tx, ty, dt)
     end
     if u.repath <= 0 or u.pathVersion ~= self.grid.version or gx ~= u.goalX or gy ~= u.goalY then
         local path = nil ---@type table[]?
-        if u.team == "ally" and u.size == 2 then path = self.grid:Path(sx, sy, gx, gy, u.size, true) end
+        -- 营地内普通单位按"直线 + 横线"的最短 L 形折线行军，方向确定；
+        -- 折线被建筑挡住、或大体型需要硬化路时，回退到 A*。
+        if u.x < C.wallCol - 0.5 and u.size == 1 then path = self.grid:LRoute(sx, sy, gx, gy) end
+        if not path and u.team == "ally" and u.size == 2 then
+            path = self.grid:Path(sx, sy, gx, gy, u.size, true)
+        end
         u.path = path or self.grid:Path(sx, sy, gx, gy, u.size) or {}
         u.pathVersion, u.goalX, u.goalY, u.repath = self.grid.version, gx, gy, 1.2
     end
@@ -480,16 +487,15 @@ function Sim:Move(u, tx, ty, dt)
         u.state, u.blocked = "窄路卡滞", u.blocked + dt
         return
     end
-    local cell = self.grid:Get(math.floor(u.x + 0.5), math.floor(u.y + 0.5))
-    local speed = t.speed
-    if cell and cell.terrain == "road" then speed = speed * (self.techLevel >= 1 and 1.5 or 1.3) end
-    if cell and cell.boost then u.boost = 1.2 end
-    if u.boost > 0 then speed = speed * 2 end
+    local speed = t.speed * C.trailSpeed[self.grid:TrailLevel(u.x, u.y) + 1]
     local step = math.min(dist, speed * dt)
     local px, py = u.x + dx / dist * step, u.y + dy / dist * step
     if self:PositionClear(u, px, py) then
         u.x, u.y, u.blocked, u.moving = px, py, 0, true
         if math.abs(dx) > 0.1 then u.facing = dx > 0 and 1 or -1 end
+        -- 己方部队的踩踏把荒野逐渐压成道路；敌军不留下痕迹。
+        -- step 近似等于本帧走过的格数，累加即为"经过此格的次数"。
+        if u.team == "ally" and u.x < C.wallCol + 1 then self.grid:Trample(u.x, u.y, step) end
     else
         u.blocked = u.blocked + dt
         u.state = "拥堵排队"
@@ -704,6 +710,37 @@ function Sim:Production(dt)
     end
 end
 
+function Sim:RoadLevel()
+    return self.roadLevelValue
+end
+
+-- 主路成型情况：逐列取城门附近踩得最实的一格（建筑格跳过），
+-- 主路等级取这些列里最普遍的水平，另统计有多少列已经踩到土路以上。
+function Sim:SurveyRoad()
+    local columns, qualified, tally = 0, 0, { 0, 0, 0, 0, 0 }
+    for x = 2, C.wallCol - 1 do
+        local best = -1
+        for y = C.gateTop - 1, C.gateTop + C.gateWidth do
+            local cell = self.grid:Get(x, y)
+            if cell and cell.building == 0 then
+                local level = self.grid:TrailLevel(x, y)
+                if level > best then best = level end
+            end
+        end
+        if best >= 0 then
+            columns = columns + 1
+            tally[best + 1] = tally[best + 1] + 1
+            if best >= 2 then qualified = qualified + 1 end
+        end
+    end
+    local mode, modeCount = 0, -1
+    for level = 0, 4 do
+        if tally[level + 1] > modeCount then mode, modeCount = level, tally[level + 1] end
+    end
+    self.roadLevelValue = mode
+    self.roadProgress = columns > 0 and qualified / columns or 0
+end
+
 function Sim:Step(dt)
     if self.paused or self.phase == "victory" or self.phase == "defeat" then return end
     self.time = self.time + dt
@@ -731,7 +768,7 @@ function Sim:Step(dt)
     for _, u in ipairs(self.units) do
         if self:Active(u) then
             u.cooldown, u.repath = math.max(0, u.cooldown-dt), math.max(0, u.repath-dt)
-            u.boost, u.flash, u.moving = math.max(0, u.boost-dt), math.max(0, u.flash-dt), false
+            u.flash, u.moving = math.max(0, u.flash-dt), false
             if u.team == "ally" then self:ApplyCommand(u); self:UpgradeUnit(u) end
             local target = self:Target(u)
             if target and (u.passedGate or u.team == "enemy") then self:Combat(u, target, dt)
@@ -766,6 +803,11 @@ function Sim:Step(dt)
     if self.diagnosticTimer >= 15 then
         self.diagnosticTimer = 0
         print(string.format("[状态] %s 第%d波 部队%d 敌人%d 拥堵%d 城墙%.0f", self.phase, self.wave, self:ArmyCount(), self:EnemyCount(), self.blockedCount, self.wallHp))
+    end
+    self.roadTimer = self.roadTimer + dt
+    if self.roadTimer >= 1 then
+        self.roadTimer = 0
+        self:SurveyRoad()
     end
 end
 return Sim

@@ -1,9 +1,9 @@
 local C = require "Frontier.Config"
 
 ---@class FrontierCell
----@field terrain string
 ---@field building number
----@field boost boolean
+---@field trail number
+---@field wear number
 
 ---@class FrontierBuilding
 ---@field id number
@@ -19,7 +19,6 @@ local C = require "Frontier.Config"
 ---@field buildings FrontierBuilding[]
 ---@field version number
 ---@field nextId number
----@field rockRatio number
 local Grid = {}
 Grid.__index = Grid
 setmetatable(Grid, { __call = function() return Grid.New() end })
@@ -36,31 +35,17 @@ function Grid:Init()
     self.buildings = {} ---@type FrontierBuilding[]
     self.version = 1
     self.nextId = 1
-    self.rockRatio = 0
-    -- 随机重试保证通路，不铺设脚本走廊；所有实际路线由 A* 计算。
-    for attempt = 1, 200 do
-        self.cells = {}
-        local rocks = 0
-        for y = 1, C.rows do
-            self.cells[y] = {}
-            for x = 1, C.cols do
-                local kind = "empty" ---@type string
-                if x == C.wallCol then kind = self:IsGateRow(y) and "road" or "wall" end
-                if x < C.wallCol and math.random() < 0.30 then kind = "rock" end
-                -- 左侧保留首座营房及出口，其他区域完全随机。
-                if x >= 2 and x <= 5 and y >= 5 and y <= 7 then kind = "empty" end
-                if kind == "rock" then rocks = rocks + 1 end
-                self.cells[y][x] = { terrain = kind, building = 0, boost = false } --[[@as FrontierCell]]
-            end
+    -- 地图不再生成岩石，也没有任何铺设/清除操作：所有格子初始都是荒野，
+    -- 唯一会改变通行条件的是建筑占地，以及部队踩踏累积出来的道路等级。
+    for y = 1, C.rows do
+        self.cells[y] = {}
+        for x = 1, C.cols do
+            local cell = { building = 0, trail = 0, wear = 0 } --[[@as FrontierCell]]
+            if x == C.wallCol and not self:IsGateRow(y) then cell.building = -1 end
+            self.cells[y][x] = cell
         end
-        self.rockRatio = rocks / ((C.wallCol - 1) * C.rows)
-        if self.rockRatio >= 0.25 and self.rockRatio <= 0.35
-            and self:Path(4, 6, C.wallCol + 1, 6, 1) then
-            print(string.format("[地图] 随机岩石 %.1f%%，第 %d 次生成，通路已验证", self.rockRatio * 100, attempt))
-            break
-        end
-        if attempt == 200 then error("地图生成未获得有效随机通路") end
     end
+    print("[地图] 无岩石空旷战场，通路全部由部队踩踏形成")
     self:AddBuilding("barracks", 2, 5)
 end
 
@@ -75,7 +60,10 @@ end
 
 function Grid:IsWalkable(x, y)
     local cell = self:Get(x, y)
-    return cell ~= nil and cell.building == 0 and cell.terrain ~= "rock" and cell.terrain ~= "wall"
+    if not cell then return false end
+    -- 城墙用 building = -1 标记：它不是建筑，也不可通行。
+    if x == C.wallCol and not self:IsGateRow(y) then return false end
+    return cell.building == 0
 end
 
 function Grid:Footprint(x, y, size)
@@ -87,14 +75,39 @@ function Grid:Footprint(x, y, size)
     return true
 end
 
-function Grid:LargeRoad(x, y, tech)
+-- 踩踏等级：0 荒野 … 4 加速通道。上限由道路科技决定（techLevel 由 Sim 同步）。
+-- 传入的是世界坐标，必须取整后才能索引格子。
+function Grid:TrailLevel(x, y, techLevel)
+    local cell = self:Get(math.floor(x + 0.5), math.floor(y + 0.5))
+    if not cell then return 0 end
+    return math.min(cell.trail, C.TrailCap(techLevel or self.techLevel or 0))
+end
+
+-- 己方单位经过时累积踩踏，走得越多路面越好。
+function Grid:Trample(x, y, amount)
+    local cell = self:Get(math.floor(x + 0.5), math.floor(y + 0.5))
+    if not cell or cell.building ~= 0 then return end
+    local before = cell.trail
+    cell.wear = cell.wear + (amount or 1)
+    local level = 0
+    for i = 1, 4 do if cell.wear >= C.trailThresholds[i] then level = i end end
+    if level ~= before then
+        cell.trail = level
+        self.version = self.version + 1
+    end
+end
+
+-- 大象需要 2×2 的「硬化路面」及以上；城门允许半跨，因为墙外禁止建造。
+function Grid:LargeRoad(x, y, techLevel)
     if x > C.wallCol then return true end
-    if tech < 1 then return false end
+    local cap = C.TrailCap(techLevel or self.techLevel or 0)
+    if cap < 3 then return false end
     for dy = 0, 1 do
         for dx = 0, 1 do
             if x + dx <= C.wallCol then
                 local cell = self:Get(x + dx, y + dy)
-                if not cell or cell.building > 0 or cell.terrain ~= "road" then return false end
+                if not cell or cell.building ~= 0 then return false end
+                if math.min(cell.trail, cap) < 3 then return false end
             end
         end
     end
@@ -106,7 +119,7 @@ function Grid:CanPlace(kind, x, y)
     if not def then return false, "未知建筑" end
     if kind == "tower" then
         local cell = self:Get(x, y)
-        if x ~= C.wallCol or self:IsGateRow(y) or not cell or cell.building > 0 then
+        if x ~= C.wallCol or self:IsGateRow(y) or not cell or cell.building ~= -1 then
             return false, "箭塔只能建在城墙上，不能占用城门"
         end
         return true, "可建造"
@@ -117,8 +130,8 @@ function Grid:CanPlace(kind, x, y)
     for dy = 0, def.h - 1 do
         for dx = 0, def.w - 1 do
             local cell = self:Get(x + dx, y + dy)
-            if not cell or cell.terrain ~= "empty" or cell.building > 0 then
-                return false, "需要空地：先清理岩石或拆除道路"
+            if not cell or cell.building ~= 0 then
+                return false, "此格已被建筑占用"
             end
         end
     end
@@ -163,28 +176,15 @@ end
 function Grid:Edit(tool, x, y)
     local cell = self:Get(x, y)
     if not cell then return false, "地图外不可操作", 0 end
-    if tool == "erase" and cell.building > 0 then
+    if tool ~= "erase" then return false, "此地形不可编辑", 0 end
+    if cell.building > 0 then
         return true, "拆除建筑，返还 55% 资源", -math.floor(self:RemoveBuilding(cell.building) * C.refundRate)
     end
-    if x >= C.wallCol then return false, "战场不可建造，城墙仅允许箭塔", 0 end
-    if cell.building > 0 then return false, "此格被建筑占用", 0 end
-    local cost, text = 0, ""
-    if tool == "clear" and cell.terrain == "rock" then
-        cell.terrain, cost, text = "empty", C.clearCost, "岩石已清除"
-    elseif tool == "road" and cell.terrain == "empty" then
-        cell.terrain, cost, text = "road", C.roadCost, "土路已铺设"
-    elseif tool == "boost" and cell.terrain == "road" and not cell.boost then
-        cell.boost, cost, text = true, C.boostCost, "加速带已铺设"
-    elseif tool == "erase" and cell.terrain == "road" then
-        cost = -math.floor((C.roadCost + (cell.boost and C.boostCost or 0)) * C.refundRate)
-        cell.terrain, cell.boost, text = "empty", false, "道路已拆除"
-    else return false, "请选择符合操作条件的格子", 0 end
-    self.version = self.version + 1
-    return true, text, cost
+    return false, "这里没有可拆除的建筑", 0
 end
 
--- 四邻域 A*，道路低成本、向右偏好；建筑与岩石均为硬障碍。
--- 大体型节点以 2×2 左上角表示；优先寻找可通行硬化路，无完整路才显示卡滞。
+-- 四邻域 A*：通行成本由踩踏等级决定（路越好越省代价），建筑为硬障碍。
+-- 大体型节点以 2×2 左上角表示；优先寻找完整硬化路，无完整路才显示卡滞。
 function Grid:Path(sx, sy, tx, ty, size, strictLarge)
     size = size or 1
     sx = math.max(1, math.min(C.cols - size + 1, math.floor(sx)))
@@ -218,13 +218,12 @@ function Grid:Path(sx, sy, tx, ty, size, strictLarge)
             closed[n.k] = true
             for _, d in ipairs(dirs) do
                 local x, y = n.x + d[1], n.y + d[2]
-                if self:Footprint(x, y, size) and (not strictLarge or self:LargeRoad(x, y, 1)) then
+                if self:Footprint(x, y, size) and (not strictLarge or self:LargeRoad(x, y, self.techLevel)) then
                     local k = key(x, y)
-                    local cell = self:Get(x, y)
-                    local step = (cell and cell.terrain == "road") and 0.55 or 1
-                    -- 仅营地向右偏置；返程与采集仍遵从实际目标方向。
+                    local step = C.trailCost[self:TrailLevel(x, y) + 1]
+                    -- 营地内略向右偏置，返程与采集仍遵从实际目标方向。
                     if x < C.wallCol and tx > sx and d[1] < 0 then step = step + 0.35 end
-                    if size == 2 and x < C.wallCol and not self:LargeRoad(x, y, 1) then step = step + 2 end
+                    if size == 2 and x < C.wallCol and not self:LargeRoad(x, y, self.techLevel) then step = step + 2 end
                     local cost = costs[n.k] + step
                     if not closed[k] and (not costs[k] or cost < costs[k]) then
                         costs[k], parent[k] = cost, n.k
@@ -236,6 +235,35 @@ function Grid:Path(sx, sy, tx, ty, size, strictLarge)
         end
     end
     return nil
+end
+
+-- 营地内单位不走 A*，而是按"直线 + 横线"的最短 L 形折线走向城门。
+-- 两条折线取踩踏代价更低的一条，方向确定，不做随机游走。
+-- 若折线被建筑挡住则返回 nil，由调用方回退到 A*。
+function Grid:LCost(x1, y1, x2, y2)
+    local cost = 0
+    for x = math.min(x1, x2), math.max(x1, x2) do cost = cost + C.trailCost[self:TrailLevel(x, y1) + 1] end
+    for y = math.min(y1, y2), math.max(y1, y2) do cost = cost + C.trailCost[self:TrailLevel(x2, y) + 1] end
+    return cost
+end
+
+function Grid:LRoute(sx, sy, tx, ty)
+    local horizontalFirst = self:LCost(sx, sy, tx, ty) <= self:LCost(sx, sy, sx, ty) + 0.0001
+    local cells, x, y = {}, sx, sy
+    local function step(nx, ny)
+        if not self:IsWalkable(nx, ny) then return false end
+        x, y = nx, ny
+        table.insert(cells, { x = x, y = y })
+        return true
+    end
+    if horizontalFirst then
+        while x ~= tx do if not step(x + (tx > x and 1 or -1), y) then return nil end end
+        while y ~= ty do if not step(x, y + (ty > y and 1 or -1)) then return nil end end
+    else
+        while y ~= ty do if not step(x, y + (ty > y and 1 or -1)) then return nil end end
+        while x ~= tx do if not step(x + (tx > x and 1 or -1), y) then return nil end end
+    end
+    return cells
 end
 
 function Grid:SpawnSpot(b, size)

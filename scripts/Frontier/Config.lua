@@ -5,8 +5,21 @@ local Config = {
     developTime = 90, startGold = 420, wallHealth = 800,
     passiveIncome = 2.5, commandCost = 15, commandCooldown = 8,
     armyLimit = 100, fixedStep = 1 / 30,
-    roadCost = 3, clearCost = 8, boostCost = 6, refundRate = 0.55,
+    refundRate = 0.55,
+    -- 道路不是铺设出来的地形，而是己方部队反复踩踏累积的痕迹：
+    -- 阈值近似"经过此格的单位次数"，踩的人多，荒野就逐渐变成土路。
+    trailThresholds = { 3, 8, 16, 28 },
+    trailSpeed = { 1.0, 1.12, 1.30, 1.55, 1.85 },
+    trailCost = { 1.0, 0.85, 0.72, 0.60, 0.50 },
+    trailNames = { "荒野", "踩踏痕迹", "土路", "硬化路面", "加速通道" },
 }
+
+-- 科技只决定"踩踏能达到的最高等级"，等级本身仍然要靠部队走出来。
+function Config.TrailCap(techLevel)
+    if techLevel >= 3 then return 4 end
+    if techLevel >= 1 then return 3 end
+    return 2
+end
 
 ---@class FrontierBuildDef
 ---@field name string
@@ -80,7 +93,11 @@ Config.units = {
         speed = 0.55, interval = 2, size = 2, color = { 215, 93, 82 }, sight = 8 },
 }
 Config.techNames = { "硬化路面", "拓宽车道", "加速通道" }
-Config.techDescriptions = { "道路 +50% 移速 · 解锁大象通行", "道路最大并行数 +1 · 缓解拥堵", "解锁加速带 · 经过后短时双倍移速" }
+Config.techDescriptions = {
+    "踩踏上限升至「硬化路面」+55% 移速 · 大象需要硬化路面",
+    "「土路」及以上并行数 +1 · 缓解拥堵",
+    "踩踏上限升至「加速通道」+85% 移速",
+}
 Config.techCosts = { 1, 2, 3 }
 Config.commandNames = { collect = "收集资源", defend = "驻守城门", attack = "全力进攻", wait = "城外待命" }
 Config.commandNotes = { collect = "自主采集 · 部队分散，城门空虚", defend = "依墙固守 · 密集站位易受范围伤害", attack = "前压追击 · 远离城墙，后方空虚" }

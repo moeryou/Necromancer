@@ -9,15 +9,16 @@ local function Check(condition, message)
     print("[测试通过] " .. message)
 end
 local function OpenCamp(sim)
-    for y=1,C.rows do
-        for x=1,C.wallCol-1 do
-            if sim.grid.cells[y][x].building==0 then sim.grid.cells[y][x].terrain="empty" end
-        end
-    end
-    sim.grid.version=sim.grid.version+1
+    -- 战场已无岩石，测试无需再清理地形；保留空实现以免误删初始民兵营。
+    sim.grid.version = sim.grid.version + 1
 end
 local function Advance(sim, seconds)
     for _=1,math.floor(seconds/C.fixedStep) do sim:Step(C.fixedStep) end
+end
+local function Wear(sim,x,y,level)
+    local cell=sim.grid.cells[y][x]
+    cell.trail=level
+    cell.wear=level>0 and C.trailThresholds[level] or 0
 end
 
 function Start()
@@ -25,7 +26,12 @@ function Start()
         for seed=1,30 do
             math.randomseed(seed)
             local grid=Grid.New()
-            Check(grid.rockRatio>=.25 and grid.rockRatio<=.35,"种子"..seed.."岩石比例有效")
+            local worn=0
+            for y=1,C.rows do for x=1,C.cols do
+                local cell=grid.cells[y][x]
+                if cell.trail~=0 or cell.wear~=0 then worn=worn+1 end
+            end end
+            Check(worn==0,"种子"..seed.."地图没有岩石且初始无踩踏")
             Check(grid:Path(4,6,C.wallCol+1,6,1)~=nil,"种子"..seed.."初始营房连通城门")
         end
         math.randomseed(31)
@@ -35,8 +41,23 @@ function Start()
         Check(not sim.grid:CanPlace("tower",C.wallCol,6),"禁止箭塔堵住城门")
         Check(sim.grid:CanPlace("tower",C.wallCol,3),"允许城墙箭塔")
         local gold=sim.gold
-        Check(sim:Perform("road",5,6) and sim.gold==gold-C.roadCost,"道路扣除准确资源")
-        Check(sim:Perform("erase",5,6) and sim.grid.cells[6][5].terrain=="empty","道路拆除恢复空地")
+        Check(not sim:Perform("clear",5,6) and not sim:Perform("road",5,6)
+            and not sim:Perform("boost",5,6) and sim.gold==gold,"清岩、铺路、加速带操作已取消且不消耗资源")
+        sim.grid:Trample(6.2,6.2,C.trailThresholds[1]-1)
+        Check(sim.grid.cells[6][6].trail==0,"踩踏不足阈值时仍是荒野")
+        sim.grid:Trample(6.2,6.2,1)
+        Check(sim.grid.cells[6][6].trail==1,"累计踩踏达到阈值生成踩踏痕迹")
+        sim.grid:Trample(6.2,6.2,C.trailThresholds[2]*2)
+        Check(sim.grid.cells[6][6].trail>=2 and sim.grid:TrailLevel(6,6)==2,"继续踩踏升级为土路")
+        sim.techLevel=1; sim.grid.techLevel=1
+        for _,p in ipairs({{6,6},{7,6},{6,7},{7,7}}) do Wear(sim,p[1],p[2],3) end
+        Check(sim.grid:LargeRoad(6,6,1) and sim.grid:TrailLevel(6,6)==3,"科技1允许踩踏到硬化路面并供大象通行")
+        for _,p in ipairs({{6,6},{7,6},{6,7},{7,7}}) do Wear(sim,p[1],p[2],2) end
+        Check(not sim.grid:LargeRoad(6,6,1),"土路不满足大象道路要求")
+        sim.techLevel=0; sim.grid.techLevel=0
+        Check(C.TrailCap(0)==2 and sim.grid:TrailLevel(6,6)==2,"无科技时踩踏封顶在土路")
+        Check(not sim.grid:LargeRoad(6,6,0),"无科技时大象无法通行")
+        sim=Simulation.New(); OpenCamp(sim)
         local b=sim.grid:AddBuilding("shield",7,5)
         b.stock=1
         local a=sim:AddUnit("militia","ally",6,5)
@@ -51,33 +72,33 @@ function Start()
         sim.units={}
         local elephant=sim:AddUnit("elephant","ally",10.5,6.5)
         sim:Move(elephant,14.5,6.5,C.fixedStep)
-        Check(elephant.state=="窄路卡滞" and elephant.x==10.5,"大象在土路停滞")
-        sim.techLevel=1
-        for y=6,7 do for x=10,16 do sim.grid.cells[y][x].terrain="road" end end
+        Check(elephant.state=="窄路卡滞" and elephant.x==10.5,"大象在荒野停滞")
+        sim.techLevel=1; sim.grid.techLevel=1
+        for y=6,7 do for x=10,16 do Wear(sim,x,y,3) end end
         sim.grid.version=sim.grid.version+1
         for _=1,60 do sim:Move(elephant,14.5,6.5,C.fixedStep) end
-        Check(elephant.x>11,"大象在两格硬化道路正常行军")
-        for y=6,7 do for x=16,C.wallCol do sim.grid.cells[y][x].terrain="road" end end
-        Check(sim.grid:LargeRoad(C.wallCol,6,1),"大象半跨城门时不要求城外铺路")
+        Check(elephant.x>11,"大象在两格硬化路面正常行军")
+        for y=6,7 do for x=16,C.wallCol do Wear(sim,x,y,3) end end
+        Check(sim.grid:LargeRoad(C.wallCol,6,1),"大象半跨城门时不要求城外踩踏")
         sim.units={}
-        for y=1,C.rows do for x=4,17 do sim.grid.cells[y][x].terrain="empty" end end
-        for x=6,17 do for y=5,6 do sim.grid.cells[y][x].terrain="road" end end
-        for y=5,6 do sim.grid.cells[y][10].terrain="empty" end
+        for y=1,C.rows do for x=4,17 do Wear(sim,x,y,0) end end
+        for x=6,17 do for y=5,6 do Wear(sim,x,y,3) end end
+        for y=5,6 do Wear(sim,10,y,0) end
         for y=5,11 do
-            for _,x in ipairs({8,9,11,12}) do sim.grid.cells[y][x].terrain="road" end
+            for _,x in ipairs({8,9,11,12}) do Wear(sim,x,y,3) end
         end
-        for y=10,11 do for x=8,12 do sim.grid.cells[y][x].terrain="road" end end
+        for y=10,11 do for x=8,12 do Wear(sim,x,y,3) end end
         sim.grid.version=sim.grid.version+1
         local detour=sim.grid:Path(8,5,14,5,2,true)
         Check(detour~=nil,"大象能找到更长的双宽硬化绕路")
         if detour then
-            for _,point in ipairs(detour) do Check(sim.grid:LargeRoad(point.x,point.y,1),"硬化绕路不经过空地捷径") end
+            for _,point in ipairs(detour) do Check(sim.grid:LargeRoad(point.x,point.y,1),"硬化绕路不经过荒野捷径") end
         end
         local walker=sim:AddUnit("elephant","ally",8.5,5.5)
         for _=1,45*30 do sim:Move(walker,14.5,5.5,C.fixedStep) end
-        Check(walker.x>13,"有完整硬化绕路时大象不永久卡滞在空地捷径")
+        Check(walker.x>13,"有完整硬化绕路时大象不永久卡滞在荒野捷径")
         sim.units={}
-        for y=5,7 do for x=14,C.wallCol do sim.grid.cells[y][x].terrain="road" end end
+        for y=5,7 do for x=14,C.wallCol do Wear(sim,x,y,3) end end
         local first=sim:AddUnit("militia","ally",16,5)
         local second=sim:AddUnit("elephant","ally",15.5,6.5)
         local third=sim:AddUnit("militia","ally",16,7)
@@ -91,7 +112,7 @@ function Start()
         sim:GateStep()
         Check(validLane.gateLane==2 and validLane.gateSlots==2,"上门行被建筑阻断时大象使用可达下两行")
         for _=1,15*30 do sim:GateStep(); sim:AllyGoal(validLane,C.fixedStep) end
-        Check(validLane.passedGate,"合法下两行硬化道路可以让大象真正出门")
+        Check(validLane.passedGate,"合法下两行硬化路面可以让大象真正出门")
         sim.grid:RemoveBuilding(obstruction.id)
         sim.units={}
         for i=1,6 do
@@ -168,15 +189,17 @@ function Start()
         enemy=sim:AddUnit("raider","enemy",18.9,6)
         sim:EnemyGoal(enemy,C.fixedStep)
         Check(sim.phase=="victory" and sim.wallHp==1,"先触发的Boss胜利不能被后续砸墙覆写")
-        -- 从可控空地布局开始，以正常资源与生产推进整局，不直接修改兵种或战斗属性。
+        -- 从干净空地开始，以正常资源与生产推进整局，不直接修改兵种或战斗属性。
+        -- 道路不再是买来的，只能靠部队自己踩出来。
         sim=Simulation.New(); OpenCamp(sim)
-        for y=5,6 do for x=4,17 do sim:Perform("road",x,y) end end
         sim:Perform("shield",6,3); sim:Perform("bow",9,3); sim:Perform("barracks",2,8)
         Advance(sim,85)
         sim:Perform("tower",18,4); sim:Perform("tower",18,8)
         sim:SetCommand("defend")
         Advance(sim,700)
         print("[整局观测] 阶段="..sim.phase.." 波次="..sim.wave.." 城墙="..sim.wallHp.." 击败="..sim.kills)
+        print(string.format("[道路观测] 主路等级=%d 达标比例=%.0f%%", sim:RoadLevel(), sim.roadProgress*100))
+        Check(sim:RoadLevel()>=2 and sim.roadProgress>=0.5,"部队的反复行军能把营地至城门踩成土路")
         Check(sim.wave>=3,"正常生产与资源规划能连续击退前两波")
         Check(sim.phase=="victory" or sim.phase=="defeat","完整多波次加Boss流程能够收束")
         print("[测试汇总] "..checks.."项全部通过")

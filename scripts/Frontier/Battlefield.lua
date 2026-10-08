@@ -71,47 +71,33 @@ function Battlefield:OnPointerDown(event)
     self.dragX, self.dragY, self.dragCamera = event.x, event.y, self.cameraX
     self.lastCell = ""
     self.hoverX, self.hoverY = self:WorldPoint(event.x,event.y)
-    -- 绘路、清理支持按住刷格；建筑只在点击抬起时放置。
-    if self.tool == "road" or self.tool == "clear" or self.tool == "erase" or self.tool == "boost" then
-        self:Brush(self.hoverX,self.hoverY)
-    end
+    -- 地形不可编辑：点击只用于浏览和放置建筑。
     event:StopPropagation()
-end
-
-function Battlefield:Brush(x,y)
-    local key = x .. ":" .. y
-    if key == self.lastCell then return end
-    self.lastCell = key
-    self.sim:Perform(self.tool,x,y)
 end
 
 function Battlefield:OnPointerMove(event)
     self.hoverX, self.hoverY = self:WorldPoint(event.x,event.y)
-    if self.dragging then
-        if self.tool == "inspect" then
-            local delta = event.x-self.dragX
-            if math.abs(delta)+math.abs(event.y-self.dragY)>6 then self.dragMoved = true end
-            self.cameraX = self.dragCamera - delta/self.tile
-            self:UpdateGeometry()
-        elseif self.tool == "road" or self.tool == "clear" or self.tool == "erase" or self.tool == "boost" then
-            self:Brush(self.hoverX,self.hoverY)
-            self.dragMoved = true
-        end
+    if self.dragging and self.tool == "inspect" then
+        local delta = event.x-self.dragX
+        if math.abs(delta)+math.abs(event.y-self.dragY)>6 then self.dragMoved = true end
+        self.cameraX = self.dragCamera - delta/self.tile
+        self:UpdateGeometry()
     end
 end
 
 function Battlefield:OnPointerUp(event)
-    if self.dragging and not self.dragMoved and C.buildings[self.tool] then
+    if self.dragging and not self.dragMoved then
         local x,y = self:WorldPoint(event.x,event.y)
-        self.sim:Perform(self.tool,x,y)
-    elseif self.dragging and not self.dragMoved and self.tool == "inspect" then
-        local x,y = self:WorldPoint(event.x,event.y)
-        local cell = self.sim.grid:Get(x,y)
-        if cell and cell.building>0 then
-            local b = self.sim.grid:FindBuilding(cell.building)
-            if b then
-                local def = C.buildings[b.kind]
-                self.sim:Notify(def.name .. " · " .. def.description .. (def.upgrade and (" · 库存 " .. b.stock .. "/5") or ""))
+        if C.buildings[self.tool] or self.tool == "erase" then
+            self.sim:Perform(self.tool,x,y)
+        else
+            local cell = self.sim.grid:Get(x,y)
+            if cell and cell.building>0 then
+                local b = self.sim.grid:FindBuilding(cell.building)
+                if b then
+                    local def = C.buildings[b.kind]
+                    self.sim:Notify(def.name .. " · " .. def.description .. (def.upgrade and (" · 库存 " .. b.stock .. "/5") or ""))
+                end
             end
         end
     end
@@ -153,26 +139,13 @@ function Battlefield:Render(vg)
                 Art.Rect(vg,px,py,s-1,s-1,{ base[1]+2,base[2]+2,base[3]+2,255 })
             end
             local hash = (x*71+y*37)%23
-            if hash<5 and cell.terrain == "empty" and cell.building==0 then
+            if hash<5 and cell.building==0 and cell.trail==0 then
                 local cx,cy=px+s*.2+hash*s*.11,py+s*.65
                 Art.Line(vg,cx,cy,cx-2,cy-3,{ 76,100,65,110 },1)
                 Art.Line(vg,cx,cy,cx+2,cy-5,{ 79,105,67,110 },1)
             end
-            if cell.terrain == "road" then
-                local col = self.sim.techLevel>=1 and { 161,169,147,255 } or { 181,162,116,255 }
-                Art.Rect(vg,px+1,py+1,s-2,s-2,col,2)
-                if self.sim.techLevel>=1 then
-                    Art.Line(vg,px+3,py+s*.5,px+s-3,py+s*.5,{ 124,144,132,140 },1)
-                    Art.Line(vg,px+s*.5,py+3,px+s*.5,py+s-3,{ 124,144,132,140 },1)
-                else
-                    Art.Circle(vg,px+s*.25,py+s*.35,1,{ 143,134,97,160 })
-                    Art.Circle(vg,px+s*.76,py+s*.73,1,{ 143,134,97,160 })
-                end
-                if cell.boost then
-                    Art.Polygon(vg,{ px+s*.3,py+s*.3,px+s*.7,py+s*.5,px+s*.3,py+s*.7 },{ 235,216,143,255 })
-                end
-            elseif cell.terrain == "rock" then Art.Rock(vg,px,py,s,x*13+y*7)
-            elseif cell.terrain == "wall" then Art.Wall(vg,px,py,s) end
+            if cell.trail > 0 then Art.Trail(vg,px,py,s,cell.trail,x*13+y*7)
+            elseif x==C.wallCol and not self.sim.grid:IsGateRow(y) then Art.Wall(vg,px,py,s) end
         end
     end
     -- 营地边界、城门条纹与行军方向刻线。
@@ -219,12 +192,18 @@ function Battlefield:Render(vg)
         nvgStrokeColor(vg,Art.Color(e.color,alpha)); nvgStrokeWidth(vg,1.5); nvgStroke(vg)
         if e.kind=="aoe" then Art.Circle(vg,x,y,radius,{ e.color[1],e.color[2],e.color[3],math.floor(alpha*.2) }) end
     end
-    if self.tool~="inspect" and self.hoverX>0 and self.hoverY>0 then
+    if self.tool == "erase" and self.hoverX>0 and self.hoverY>0 then
+        local cell = self.sim.grid:Get(self.hoverX,self.hoverY)
+        local x,y=ox+(self.hoverX-1)*s,oy+(self.hoverY-1)*s
+        if cell and cell.building>0 then
+            Art.Rect(vg,x,y,s,s,{ 225,117,95,110 },2)
+            nvgBeginPath(vg); nvgRect(vg,x+1,y+1,s-2,s-2)
+            nvgStrokeColor(vg,nvgRGBA(244,138,112,255)); nvgStrokeWidth(vg,2); nvgStroke(vg)
+        end
+    elseif C.buildings[self.tool] and self.hoverX>0 and self.hoverY>0 then
         local def=C.buildings[self.tool]
-        local w,h=def and def.w or 1,def and def.h or 1
-        local valid=true
-        if def then valid=self.sim.grid:CanPlace(self.tool,self.hoverX,self.hoverY)
-        else valid=self.hoverX<C.wallCol and self.hoverY<=C.rows end
+        local w,h=def.w,def.h
+        local valid=self.sim.grid:CanPlace(self.tool,self.hoverX,self.hoverY)
         local col=valid and { 229,218,163,90 } or { 225,117,95,120 }
         local x,y=ox+(self.hoverX-1)*s,oy+(self.hoverY-1)*s
         Art.Rect(vg,x,y,w*s,h*s,col,2)
