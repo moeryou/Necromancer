@@ -226,7 +226,7 @@ function Battlefield:Render(vg)
             local px,py = ox+(x-1)*s,oy+(y-1)*s
             local cell = self.sim.grid.cells[y][x]
             local hash = (x*71+y*37)%23
-            if hash<7 and cell.building==0 and cell.trail==0 then
+            if hash<7 and cell.building==0 and cell.trail==0 and cell.resource==0 then
                 local cx,cy=px+s*(.18+hash*.10),py+s*.72
                 Art.GrassTuft(vg,cx,cy,s*.34)
                 if hash<2 then Art.Flower(vg,cx+s*.30,cy-s*.06,s*.30,{ 246,244,236,255 }) end
@@ -234,6 +234,10 @@ function Battlefield:Render(vg)
             if cell.trail > 0 then Art.Trail(vg,px,py,s,cell.trail,x*13+y*7)
             elseif x==C.wallCol and not self.sim.grid:IsGateRow(y) then Art.Wall(vg,px,py,s) end
         end
+    end
+    -- 资源点画在地面之后、建筑之前：占格不可通行，是农民的目标。
+    for _,res in ipairs(self.sim.grid.resources) do
+        Art.Resource(vg,res,ox,oy,s)
     end
     -- 路线反馈：先画预测虚线（摆放建筑时），再画实际轨迹实线。
     self:DrawRoute(vg,s,ox,oy)

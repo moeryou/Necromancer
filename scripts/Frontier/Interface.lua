@@ -94,7 +94,7 @@ function Interface:Create()
                 Label("边 境 工 事",23,P.text,{ fontWeight="bold" }),
                 Label("FRONTIER  /  间接指挥 · 波次塔防",9,P.muted,{ letterSpacing=1.5 }),
             } },
-            resourceCard("基础资源  /  +2.5每秒","gold",P.gold),
+            resourceCard("资源  /  被动+0.5每秒 · 采集为主","gold",P.gold),
             UI.Panel { width=self.narrow and 120 or 174,height=52,paddingHorizontal=14,justifyContent="center",gap=5,
                 borderLeftWidth=1,borderLeftColor=P.line,children={
                     Label("城墙完整度",9,P.muted),
@@ -211,12 +211,12 @@ end
 
 function Interface:CreateHelp()
     local lines={
-        { "01 / 规划营地", "战场空旷无物，也没有铺路工具。建筑一旦落下便不可移动，拆除只返还 50% 资源；你改变地形的手段，是用建筑占地去引导部队的走向。" },
-        { "02 / 道路自己长出来", "部队从营地走到城门会反复踩踏同一条路线。走得越多，荒野依次变成踩踏痕迹、土路、硬化路面、加速通道，移速越来越快；站在硬化路面上的单位还能额外减伤。道路完全自发形成，无法铺设也无法拆除。" },
-        { "03 / 兵力与加工", "我方同时存在的士兵上限为" .. C.armyLimit .. "。民兵营按周期产出民兵，士兵路过工序建筑相邻格即自动加工：盾牌、锻炉提升生存，弓箭、瞄准台切换远程，马厩提升机动，号角强化首击。装备可叠加，但弓与盾互斥。" },
-        { "04 / 攻守取舍", "驻守城门不追击，但怕范围伤害；全力进攻主动前压，但后方空虚。每条指令消耗15资源，冷却8秒。" },
-        { "05 / 道路与巨兽", "击退波次获得资源补给。大象必须有2格宽的硬化路面才能通行；路面不够宽，大象会卡滞并堵塞后队。" },
-        { "06 / 最终决战", "击退3轮普通波次后直接迎战Boss。击败破城巨兽即可通关；城墙生命为0则失败。" },
+        { "01 / 双产线营地", "营地有两条独立产线：民兵营产战斗单位（上限" .. C.armyLimit .. "），农民营产采集单位（不占战斗人口）。农民永久限制在营地内，只负责采集与运输，绝不出城。" },
+        { "02 / 农民与资源", "在资源点旁建仓库，农民会自动前往最近的空闲资源点采集，再把资源背回仓库入库。森林单次3秒、矿物单次5秒；矿物更值钱（1单位=2资源值）。资源点采空后地块恢复为普通空地，可通行、可建造。" },
+        { "03 / 资源怎么花", "被动产出仅 0.5/秒，经济主力是农民采集。盾牌工坊、锻炉、马厩属重装工序，每加工1名士兵额外消耗2资源值（等价1单位矿物）；其余建筑只消耗资源值。" },
+        { "04 / 兵力与加工", "士兵路过工序建筑相邻格即自动加工：盾牌、锻炉提升生存，弓箭、瞄准台切换远程，马厩提升机动，号角强化首击。装备可叠加，但弓与盾互斥。多格建筑的正面多格可并行加工。" },
+        { "05 / 道路与寻路", "所有单位只走横竖向、按通行时间最短寻路：走得多的格子路更好、更快，单位自然改走快路。道路完全由部队在营地内踩踏形成，城外不产生任何道路变化。" },
+        { "06 / 最终决战", "击退3轮普通波次后直接迎战Boss。击败破城巨兽即可通关；城墙生命为0则失败。大象需2格宽硬化路面才能通行。" },
     }
     local items={ Label("指挥的是规则，不是士兵。",20,P.gold,{ fontWeight="bold" }),
         Label("横向卷轴 · 间接指挥型塔防",11,P.muted) }
@@ -272,7 +272,7 @@ function Interface:Update(dt)
     self:Text("phaseHint",sim.phase=="develop" and "规划生产线，用建筑占地引导部队走向" or sim.phase=="boss" and "破城巨兽优先攻击密集部队 · 保持分散" or ("消灭全部敌军 · 待刷新 "..#sim.waveQueue.." · 战场 "..sim:EnemyCount()))
     local wb=self:Find("waveButton") --[[@as Button?]]
     if wb then wb:SetDisabled(sim.phase~="develop"); wb:SetText(sim.phase=="develop" and ("迎敌 +"..math.floor(sim.phaseTime*.65).."  →") or "敌军来袭") end
-    self:Text("counts","部队 "..sim:ArmyCount().." · 加工 "..sim.converted.." · 击败 "..sim.kills)
+    self:Text("counts","部队 "..sim:ArmyCount().." · 农民 "..sim:FarmerCount().." · 采集 "..math.floor(sim.harvested).." · 击败 "..sim.kills)
     local info=C.buildings[self.tool]
     if self.tool=="demolish" then
         self:Text("mapStatus","拆除模式 · 点击建筑返还 50% 资源")
@@ -290,7 +290,7 @@ function Interface:Update(dt)
             btn:SetStyle({borderColor=sim.command==kind and P.gold or P.line,backgroundColor=sim.command==kind and {73,78,56,255} or P.card})
         end
     end
-    for _,kind in ipairs({"inspect","demolish","barracks","elephant","shield","bow","forge","aim","stable","horn","tower","block"}) do
+    for _,kind in ipairs({"inspect","demolish","barracks","farmerBarracks","elephant","shield","bow","forge","aim","stable","horn","warehouse","tower","block"}) do
         local btn=self:Find("tool_"..kind) --[[@as Button?]]
         if btn then btn:SetStyle({borderColor=self.tool==kind and P.gold or P.line,backgroundColor=self.tool==kind and {75,81,58,255} or P.card}) end
     end

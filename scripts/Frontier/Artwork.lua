@@ -358,6 +358,25 @@ function Art.Building(vg, kind, x, y, s, stock, progress, time)
             stroke(g, { 248, 226, 156, 255 }, r * .34)
             Art.Circle(g, cx - r * .8, cy + r * .5, r * .3, { 248, 226, 156, 255 }, p.outline, r * .14)
         end
+    elseif kind == "farmerBarracks" then
+        roof, roofDark = p.roofGreen, p.roofGreenD
+        -- 麦穗
+        emblem = function(g, cx, cy, r)
+            Art.Line(g, cx, cy + r * .9, cx, cy - r * .8, { 232, 206, 120, 255 }, r * .16)
+            for i = 0, 2 do
+                local yy = cy - r * (.5 - i * .55)
+                Art.Line(g, cx, yy, cx - r * .5, yy - r * .35, { 244, 224, 150, 255 }, r * .14)
+                Art.Line(g, cx, yy, cx + r * .5, yy - r * .35, { 244, 224, 150, 255 }, r * .14)
+            end
+        end
+    elseif kind == "warehouse" then
+        -- 仓库是 1×1 非阻挡建筑：木箱 + 顶棚，不能画成普通房屋。
+        Art.Ellipse(vg, x + s * .55, y + s * .92, s * .40, s * .12, p.shadow)
+        Art.Rect(vg, x + s * .14, y + s * .34, s * .72, s * .54, p.wood, s * .06, p.outline, s * .06)
+        Art.Rect(vg, x + s * .10, y + s * .22, s * .80, s * .18, p.roofOrange, s * .05, p.outline, s * .05)
+        Art.Line(vg, x + s * .14, y + s * .61, x + s * .86, y + s * .61, p.woodDark, s * .05)
+        Art.Circle(vg, x + s * .5, y + s * .48, s * .10, { 240, 210, 138, 255 }, p.outline, s * .04)
+        return
     end
 
     house(vg, x, y, w, h, roof, roofDark, { emblem = emblem })
@@ -476,6 +495,62 @@ local function beast(vg, u, z, t, p)
     Art.Line(vg, z * .18, z * .32, z * .14, z * .86, color, z * .24)
 end
 
+-- 农民：草帽 + 布衣，背负资源时显示袋子。
+local function farmer(vg, u, z, t, p)
+    local color = u.flash > 0 and { 255, 246, 224, 255 } or C.units[u.kind].color
+    local f = u.facing
+    Art.Rect(vg, -z * .26, z * .18, z * .20, z * .40, p.boot, z * .08, p.outline, z * .07)
+    Art.Rect(vg, z * .06, z * .18, z * .20, z * .40, p.boot, z * .08, p.outline, z * .07)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, -z * .38, -z * .30, z * .76, z * .60, z * .22)
+    fillStroke(vg, color, p.outline, z * .11)
+    Art.Rect(vg, -z * .39, z * .04, z * .78, z * .12, { 168, 128, 84, 255 }, z * .03, p.outline, z * .05)
+    -- 背负资源袋：采集完成、运送途中才显示。
+    if u.carry > 0 then
+        Art.Circle(vg, -z * .40 * f, -z * .16, z * .20,
+            u.carryKind == "mineral" and { 176, 184, 198, 255 } or { 150, 190, 110, 255 },
+            p.outline, z * .05)
+    end
+    Art.Circle(vg, 0, -z * .48, z * .29, p.skin, p.outline, z * .085)
+    Art.Circle(vg, -z * .11, -z * .30, z * .05, { 62, 48, 42, 255 })
+    Art.Circle(vg, z * .11, -z * .30, z * .05, { 62, 48, 42, 255 })
+    -- 草帽：宽檐 + 尖顶
+    Art.Ellipse(vg, 0, -z * .66, z * .46, z * .14, { 226, 196, 118, 255 }, p.outline, z * .06)
+    Art.Ellipse(vg, 0, -z * .76, z * .26, z * .18, { 240, 214, 140, 255 }, p.outline, z * .06)
+end
+
+-- 资源点：森林（圆冠树丛）与矿物（晶体块），逐格绘制。
+function Art.Resource(vg, res, ox, oy, s)
+    local def = C.resources[res.kind]
+    for _, c in ipairs(res.cells) do
+        local x, y = ox + (c.x - 1) * s, oy + (c.y - 1) * s
+        if res.kind == "forest" then
+            Art.Ellipse(vg, x + s * .5, y + s * .9, s * .42, s * .12, Art.palette.shadow)
+            Art.Rect(vg, x + s * .42, y + s * .55, s * .16, s * .36, Art.palette.wood, s * .04, Art.palette.outline, s * .05)
+            nvgBeginPath(vg)
+            nvgCircle(vg, x + s * .5, y + s * .42, s * .36)
+            fillStroke(vg, def.color, Art.palette.outline, s * .07)
+            nvgBeginPath(vg)
+            nvgCircle(vg, x + s * .42, y + s * .32, s * .18)
+            nvgFillColor(vg, Art.Color({ 124, 186, 110, 220 })); nvgFill(vg)
+        else
+            Art.Ellipse(vg, x + s * .5, y + s * .9, s * .40, s * .12, Art.palette.shadow)
+            Art.Polygon(vg, { x + s * .5, y + s * .12, x + s * .82, y + s * .52, x + s * .5, y + s * .88, x + s * .18, y + s * .52 },
+                def.color, Art.palette.outline, s * .07)
+            Art.Polygon(vg, { x + s * .5, y + s * .18, x + s * .68, y + s * .50, x + s * .5, y + s * .48 },
+                { 214, 222, 234, 210 })
+        end
+    end
+    -- 剩余储量条：让"还要不要继续采"一眼可判。
+    if #res.cells > 0 then
+        local c = res.cells[1]
+        local ratio = res.maxStock > 0 and res.stock / res.maxStock or 0
+        local bx, by = ox + (c.x - 1) * s + s * .12, oy + (c.y - 1) * s - s * .16
+        Art.Rect(vg, bx, by, s * .76, 3, { 42, 50, 38, 220 }, 1.5)
+        Art.Rect(vg, bx, by, s * .76 * ratio, 3, def.color, 1.5)
+    end
+end
+
 function Art.Unit(vg, u, x, y, s, time)
     local p = Art.palette
     local t = C.units[u.kind]
@@ -485,7 +560,8 @@ function Art.Unit(vg, u, x, y, s, time)
     nvgTranslate(vg, x, y)
     local bob = u.moving and math.sin(time * 12 + u.id) * z * .08 or 0
     nvgTranslate(vg, 0, bob)
-    if u.size == 2 then beast(vg, u, z, t, p)
+    if u.worker then farmer(vg, u, z, t, p)
+    elseif u.size == 2 then beast(vg, u, z, t, p)
     elseif u.gear.stable then cavalry(vg, u, z, t, p)
     else soldier(vg, u, z, t, p) end
     nvgRestore(vg)

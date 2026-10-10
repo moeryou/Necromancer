@@ -23,6 +23,22 @@ function Start()
     for _,b in ipairs(builds) do
         sim:Perform(b[1],b[2],b[3])
     end
+    -- 在第一处资源点旁找空位建仓库，让农民有卸货点、能真正跑起采集循环。
+    local target=sim.grid.resources[1]
+    if target then
+        local base=target.cells[1]
+        for radius=1,5 do
+            local done=false
+            for dy=-radius,radius do
+                for dx=-radius,radius do
+                    if not done and sim.grid:CanPlace("warehouse",base.x+dx,base.y+dy) then
+                        done=sim:Perform("warehouse",base.x+dx,base.y+dy)
+                    end
+                end
+            end
+            if done then break end
+        end
+    end
     for _=1,75*30 do sim:Step(C.fixedStep) end
     sim:SetCommand("defend")
     sim:StartWave(true)

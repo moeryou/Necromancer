@@ -52,6 +52,18 @@ local Grid = require "Frontier.Grid"
 ---@field moving boolean
 ---@field flash number
 ---@field active boolean
+-- 农民专用
+---@field worker boolean
+---@field task string
+---@field targetResource? number
+---@field targetCell? table
+---@field carry number
+---@field carryKind? string
+---@field gatherTimer number
+---@field waitTimer number
+---@field homeX number
+---@field homeY number
+---@field wanderAngle number
 
 ---@class FrontierShot
 ---@field x number
@@ -94,6 +106,7 @@ local Grid = require "Frontier.Grid"
 ---@field kills number
 ---@field converted number
 ---@field produced number
+---@field harvested number
 ---@field notice string
 ---@field noticeTime number
 ---@field gateUsed number
@@ -108,6 +121,7 @@ local Grid = require "Frontier.Grid"
 ---@field roadLevelValue number
 ---@field allyCount number
 ---@field enemyCount number
+---@field farmerCount number
 local Sim = {}
 Sim.__index = Sim
 
@@ -131,18 +145,16 @@ function Sim:Init()
     self.command, self.commandTimer, self.commandVersion = "wait", 0, 1
     self.time, self.paused, self.speed = 0, false, 1
     self.nextUnit, self.nextTicket = 1, 1
-    self.kills, self.converted, self.produced = 0, 0, 0
-    self.allyCount, self.enemyCount = 0, 0
-    self.notice = "首座民兵营已就绪。用工序建筑的占地引导部队，让它们逐件接受加工。"
+    self.kills, self.converted, self.produced, self.harvested = 0, 0, 0, 0
+    self.allyCount, self.enemyCount, self.farmerCount = 0, 0, 0
+    self.notice = "民兵营与农民营已就绪。建仓库、让农民采集资源，再规划你的生产线。"
     self.noticeTime, self.gateUsed, self.blockedCount = 8, 0, 0
     self.pathBlocked = 0
-    -- 路线反馈：actualRoute 记录第一名士兵的真实行进轨迹（实线），
-    -- previewCache 缓存摆放建筑时的预测路线（虚线），随地图版本失效。
     self.actualRoute = {} ---@type table[]
     self.leadId = nil ---@type number?
     self.diagnosticTimer = 0
     self.roadTimer, self.roadProgress, self.roadLevelValue = 0, 0, 0
-    print("[游戏] 单机初始化，90秒发育，3波普通敌军后直接进入Boss战；兵力上限" .. C.armyLimit)
+    print("[游戏] 单机初始化：双产线（民兵/农民）+ 资源采集；被动 0.5/秒，初始 " .. C.startGold)
 end
 
 function Sim:Notify(text)
@@ -162,14 +174,21 @@ function Sim:EnemyCount()
     return self.enemyCount
 end
 
+-- 农民不占战斗人口：allyCount 只统计战斗单位。
+function Sim:FarmerCount()
+    return self.farmerCount
+end
+
 function Sim:RefreshCounts()
-    local ally, enemy = 0, 0
+    local ally, enemy, farmer = 0, 0, 0
     for _, u in ipairs(self.units) do
         if u.active and u.hp > 0 then
-            if u.team == "ally" then ally = ally + 1 else enemy = enemy + 1 end
+            if u.team == "enemy" then enemy = enemy + 1
+            elseif u.worker then farmer = farmer + 1
+            else ally = ally + 1 end
         end
     end
-    self.allyCount, self.enemyCount = ally, enemy
+    self.allyCount, self.enemyCount, self.farmerCount = ally, enemy, farmer
 end
 
 -- 从单位模板复制一份可变的"基础属性"。所有加工都以此为起点，绝不直接改写模板。
@@ -188,7 +207,6 @@ function Sim:Recompute(u)
     local b, f, p = u.base, u.flat, u.pct
     local s = u.stats
     local oldMax = u.maxHp
-    -- p[k] 存放该属性的累计百分比乘数（默认 1），多个百分比以乘法叠加。
     s.hp = math.max(1, (b.hp + (f.hp or 0)) * (p.hp or 1))
     s.armor = b.armor + (f.armor or 0)
     s.damage = (b.damage + (f.damage or 0)) * (p.damage or 1)
@@ -200,7 +218,6 @@ function Sim:Recompute(u)
     s.aoe = b.aoe
     s.size = b.size
     u.maxHp = s.hp
-    -- 生命上限变化时补足差值，避免加工后仍停在旧血量。
     if oldMax and s.hp > oldMax then u.hp = u.hp + (s.hp - oldMax) end
     if u.hp > u.maxHp then u.hp = u.maxHp end
 end
@@ -216,13 +233,16 @@ function Sim:AddUnit(kind, team, x, y)
         cooldown = 0, path = {}, pathVersion = 0, goalX = -1, goalY = -1, repath = 0, blocked = 0,
         state = "行军", commandVersion = 0, passedGate = team ~= "ally", ticket = 0,
         gateLane = 0, gateSlots = 0, facing = team == "ally" and 1 or -1,
-        moving = false, flash = 0, active = true } --[[@as FrontierUnit]]
+        moving = false, flash = 0, active = true,
+        worker = t.worker or false, task = "idle", carry = 0, carryKind = nil,
+        gatherTimer = 0, waitTimer = 0, homeX = x, homeY = y, wanderAngle = 0 } --[[@as FrontierUnit]]
     u.stats = BaseStats(kind)
     self.nextUnit = self.nextUnit + 1
     self.units[#self.units + 1] = u
     if u.active and u.hp > 0 then
-        if team == "ally" then self.allyCount = self.allyCount + 1
-        else self.enemyCount = self.enemyCount + 1 end
+        if team == "enemy" then self.enemyCount = self.enemyCount + 1
+        elseif u.worker then self.farmerCount = self.farmerCount + 1
+        else self.allyCount = self.allyCount + 1 end
     end
     return u
 end
@@ -233,10 +253,12 @@ function Sim:FootCell(u)
     return math.floor(u.x - offset + 0.5), math.floor(u.y - offset + 0.5)
 end
 
--- 接触即加工：检查单位当前相邻的工序建筑，逐条尝试。
--- 规则：单次生效（processed 去重）、互斥（conflict）、前置（requires）、号角仅一次（once）。
+------------------------------------------------------------------
+-- 接触式加工
+------------------------------------------------------------------
+
 function Sim:ProcessUnit(u)
-    if u.team ~= "ally" then return end
+    if u.team ~= "ally" or u.worker then return end
     local ux, uy = self:FootCell(u)
     local procs = self.grid:ProcessorsFor(ux, uy, u.size)
     for _, b in ipairs(procs) do
@@ -251,12 +273,18 @@ function Sim:ProcessUnit(u)
                 end
             end
             if blocked then
-                -- 互斥/前置不满足：跳过加工，但保留清晰提示（限流，避免刷屏）。
                 if u.lastReject ~= pr.tag then
                     u.lastReject = pr.tag
                     self:Notify(blocked)
                 end
+            elseif C.heavyProcessings[pr.tag] and self.gold < C.heavyProcessCost then
+                -- 重装工序额外消耗矿物资源值，资源不足则跳过加工（不扣、不标记）。
+                if u.lastReject ~= pr.tag then
+                    u.lastReject = pr.tag
+                    self:Notify("矿物不足（需 " .. C.heavyProcessCost .. " 资源值），无法完成" .. pr.label)
+                end
             else
+                if C.heavyProcessings[pr.tag] then self.gold = self.gold - C.heavyProcessCost end
                 self:GrantProcessing(u, pr, b)
             end
         end
@@ -271,17 +299,13 @@ function Sim:GrantProcessing(u, pr, b)
     end
     if pr.pct then
         -- 百分比加成以乘法叠加：pct[k] 存累计乘数，默认 1。
-        -- 例如 -10% 与 -5% 得 0.9×0.95 = 0.855。
-        for k, v in pairs(pr.pct) do
-            u.pct[k] = (u.pct[k] or 1) * (1 + v)
-        end
+        for k, v in pairs(pr.pct) do u.pct[k] = (u.pct[k] or 1) * (1 + v) end
     end
     if pr.set then
         for k, v in pairs(pr.set) do u.override[k] = v end
     end
     if pr.charge then u.chargeBonus = u.chargeBonus + pr.charge end
     if pr.firstHit then u.firstHit = u.firstHit * pr.firstHit end
-    if pr.once then u.processed[pr.tag] = true end
     self:Recompute(u)
     b.processed = (b.processed or 0) + 1
     self.converted = self.converted + 1
@@ -291,13 +315,17 @@ function Sim:GrantProcessing(u, pr, b)
     end
 end
 
+------------------------------------------------------------------
+-- 建造 / 拆除 / 指令
+------------------------------------------------------------------
+
 function Sim:Perform(tool, x, y)
     if self.phase == "victory" or self.phase == "defeat" then return false end
     local def = C.buildings[tool]
     if def then
         local ok, reason = self.grid:CanPlace(tool, x, y)
         if not ok then self:Notify(reason); return false end
-        if self.gold < def.cost then self:Notify("基础资源不足"); return false end
+        if self.gold < def.cost then self:Notify("资源不足"); return false end
         for _, u in ipairs(self.units) do
             if self:Active(u) and u.x + u.size * 0.42 > x - 0.5 and u.x - u.size * 0.42 < x + def.w - 0.5
                 and u.y + u.size * 0.42 > y - 0.5 and u.y - u.size * 0.42 < y + def.h - 0.5 then
@@ -312,7 +340,6 @@ function Sim:Perform(tool, x, y)
     return false
 end
 
--- 拆除建筑，仅返还 50% 资源。放置后不可移动，拆除是唯一的撤销手段。
 function Sim:Demolish(x, y)
     if self.phase == "victory" or self.phase == "defeat" then return false end
     local cell = self.grid:Get(x, y)
@@ -323,26 +350,30 @@ function Sim:Demolish(x, y)
     local refund = math.floor(def.cost * C.refundRatio)
     self.grid:RemoveBuilding(b.id)
     self.gold = self.gold + refund
-    self:Notify("已拆除" .. def.name .. "，返还 " .. refund .. " 基础资源")
+    self:Notify("已拆除" .. def.name .. "，返还 " .. refund .. " 资源")
     return true
 end
 
 function Sim:SetCommand(command)
     if self.phase == "victory" or self.phase == "defeat" then return end
     if self.commandTimer > 0 then self:Notify("全局指令冷却中"); return end
-    if self.gold < C.commandCost then self:Notify("发布指令需要15基础资源"); return end
+    if self.gold < C.commandCost then self:Notify("发布指令需要15资源"); return end
     self.gold = self.gold - C.commandCost
     self.command, self.commandTimer = command, C.commandCooldown
     self.commandVersion = self.commandVersion + 1
     self:Notify(C.commandNames[command] .. "：" .. C.commandNotes[command])
 end
 
+------------------------------------------------------------------
+-- 波次
+------------------------------------------------------------------
+
 function Sim:StartWave(early)
     if self.phase ~= "develop" then return end
     if early and self.phaseTime > 0 then
         local reward = math.floor(self.phaseTime * 0.65)
         self.gold = self.gold + reward
-        self:Notify("提前迎敌！奖励 " .. reward .. " 基础资源；趁敌人还没到，先摆好产线")
+        self:Notify("提前迎敌！奖励 " .. reward .. " 资源；趁敌人还没到，先摆好产线")
     end
     self.phase, self.phaseTime, self.spawnTimer = "battle", 0, 0.2
     self.waveQueue = {}
@@ -364,7 +395,7 @@ end
 
 function Sim:WaveComplete()
     self.gold = self.gold + 100 + self.wave * 30
-    self:Notify("第 " .. self.wave .. " 波击退！获得基础资源补给")
+    self:Notify("第 " .. self.wave .. " 波击退！获得资源补给")
     if self.wave == 3 then self:StartBoss(); return end
     self.wave = self.wave + 1
     self.phase, self.phaseTime = "develop", C.developTime
@@ -382,6 +413,10 @@ function Sim:FindUnit(id)
     return nil
 end
 
+------------------------------------------------------------------
+-- 战斗
+------------------------------------------------------------------
+
 function Sim:Damage(target, amount)
     if self.phase == "victory" or self.phase == "defeat" then return end
     if not self:Active(target) then return end
@@ -394,6 +429,8 @@ function Sim:Damage(target, amount)
     if target.hp <= 0 then
         self:Effect(target.x, target.y, "death", C.units[target.kind].color, target.size * 0.5)
         target.active = false
+        -- 农民阵亡立即释放已占用的采集位（V3.2 §3.4）。
+        if target.worker then self:ReleaseSlot(target) end
         if target.team == "enemy" then self.kills = self.kills + 1 end
         if target.kind == "boss" then
             self.phase = "victory"
@@ -407,7 +444,6 @@ function Sim:Attack(u, target)
     if u.cooldown > 0 then return end
     u.cooldown = t.interval
     u.facing = target.x > u.x and 1 or -1
-    -- 伤害修正：号角首击（全局一次）与坐骑冲锋（对新目标接敌）。
     local multiplier = 1
     if not u.firstHitUsed and u.firstHit ~= 1 then multiplier = multiplier * u.firstHit end
     if u.chargeBonus > 0 and u.lastTarget ~= target.id then multiplier = multiplier * (1 + u.chargeBonus) end
@@ -436,7 +472,8 @@ function Sim:Target(u)
     local bestScore = math.huge
     local sight2 = t.sight * t.sight
     for _, v in ipairs(self.units) do
-        if v.active and v.hp > 0 and v.team ~= u.team
+        -- 农民不参战、也不被选为目标。
+        if v.active and v.hp > 0 and v.team ~= u.team and not v.worker
             and (v.x - u.x)^2 + (v.y - u.y)^2 <= sight2 then
             local dx, dy = v.x - u.x, v.y - u.y
             local dist = math.sqrt(dx * dx + dy * dy)
@@ -461,6 +498,10 @@ function Sim:Target(u)
     end
     return best
 end
+
+------------------------------------------------------------------
+-- 移动与碰撞
+------------------------------------------------------------------
 
 function Sim:CollisionRadius(u, x, y)
     if u.size == 2 then return 0.87 end
@@ -487,11 +528,20 @@ function Sim:PositionClear(u, x, y, passAllies)
     return true
 end
 
+-- 避让优先级（V3.2 §1.5）：农民 < 民兵 < 转职兵种 < 大象。数值越大越"重"，
+-- 相向而行时轻单位主动侧移，重单位保持原路径。
+function Sim:AvoidRank(u)
+    if u.worker then return 1 end
+    if u.size == 2 then return 4 end
+    if next(u.gear) ~= nil then return 3 end
+    return 2
+end
+
 function Sim:GateStep()
     local used = {}
     self.gateUsed = 0
     for _, u in ipairs(self.units) do
-        if self:Active(u) and u.team == "ally" and not u.passedGate then
+        if self:Active(u) and u.team == "ally" and not u.worker and not u.passedGate then
             if u.gateSlots > 0 and u.x > C.wallCol + u.size * 0.5 then
                 u.passedGate, u.gateSlots, u.ticket = true, 0, 0
                 u.path = {}
@@ -508,6 +558,7 @@ function Sim:GateStep()
     for _, u in ipairs(self.units) do
         if self:Active(u) and u.ticket > 0 and u.gateSlots == 0 then table.insert(queue, u) end
     end
+    -- 出城优先于进城、战斗单位优先于生产单位：票据内先按这两项排序（V3.2 §1.5）。
     table.sort(queue, function(a, b) return a.ticket < b.ticket end)
     for _, u in ipairs(queue) do
         local found = 0
@@ -543,6 +594,21 @@ function Sim:CrowdDensity(x, y, u, radius)
     return count
 end
 
+-- 路径惰性（V3.2 §1.3）：只有"路径被阻断""目标失效"或"新路径快 15% 以上"才重算。
+-- 路径为空（阻断/失效）必须立刻重算；是否愿意做一次昂贵的 A* 比较，由
+-- allowExpensive 控制（Move 里按 repathInterval 节流），避免每帧重算。
+---@param allowExpensive boolean
+function Sim:NeedsRepath(u, gx, gy, size, allowExpensive)
+    if #u.path == 0 then return true end
+    if not allowExpensive then return false end
+    local fresh = self.grid:Path(math.floor(u.x), math.floor(u.y), gx, gy, size)
+    if not fresh then return true end
+    local curRemain, newTotal = 0, 0
+    for _, p in ipairs(u.path) do curRemain = curRemain + C.trailCost[self.grid:TrailLevel(p.x, p.y) + 1] end
+    for _, p in ipairs(fresh) do newTotal = newTotal + C.trailCost[self.grid:TrailLevel(p.x, p.y) + 1] end
+    return newTotal < curRemain * (1 - C.repathGain)
+end
+
 function Sim:Move(u, tx, ty, dt)
     local t = u.stats
     local offset = (u.size - 1) * 0.5
@@ -561,16 +627,22 @@ function Sim:Move(u, tx, ty, dt)
             return
         end
     end
-    if u.repath <= 0 or u.pathVersion ~= self.grid.version or gx ~= u.goalX or gy ~= u.goalY then
+    if gx ~= u.goalX or gy ~= u.goalY then
+        u.goalX, u.goalY, u.path = gx, gy, {}
+    end
+    -- 地图版本变化时才允许做一次昂贵的重算比较，并按 repathInterval 节流。
+    local allowExpensive = u.repath <= 0
+    if self:NeedsRepath(u, gx, gy, u.size, allowExpensive) then
         local path = nil ---@type table[]?
-        if u.x < C.wallCol - 0.5 and u.size == 1 then
+        -- 营地内普通战斗单位按"直线 + 横线"的最短 L 形折线行军，方向确定。
+        if u.x < C.wallCol - 0.5 and u.size == 1 and not u.worker then
             path = self.grid:LRoute(sx, sy, gx, gy)
         end
         if not path and u.team == "ally" and u.size == 2 then
             path = self.grid:Path(sx, sy, gx, gy, u.size, true)
         end
         u.path = path or self.grid:Path(sx, sy, gx, gy, u.size) or {}
-        u.pathVersion, u.goalX, u.goalY, u.repath = self.grid.version, gx, gy, 1.2
+        u.pathVersion, u.repath = self.grid.version, C.repathInterval
     end
     local nx, ny = tx, ty
     if #u.path > 0 then nx, ny = u.path[1].x + offset, u.path[1].y + offset end
@@ -593,13 +665,12 @@ function Sim:Move(u, tx, ty, dt)
     if self:PositionClear(u, px, py) or (stuck and self:PositionClear(u, px, py, true)) then
         u.x, u.y, u.blocked, u.moving = px, py, 0, true
         if math.abs(dx) > 0.1 then u.facing = dx > 0 and 1 or -1 end
-        -- 己方部队的踩踏把荒野逐渐压成道路；敌军不留下痕迹。
-        -- 只在"进入新格子"时记 1 次经过，而不是每帧累加位移；
-        -- 同一单位 10 秒内折返同一格不再计数（防原地抖动刷道路）。
+        -- 踩踏只发生在营地内（V3.2 §1.4 区域隔离）：荒野/城外地形永久为荒野。
+        -- 只在"进入新格子"时记 1 次经过，同一单位 10 秒内折返同一格不再计数。
         local cx, cy = math.floor(u.x + 0.5), math.floor(u.y + 0.5)
         if u.cellX ~= cx or u.cellY ~= cy then
             u.cellX, u.cellY = cx, cy
-            if u.team == "ally" and u.x < C.wallCol + 1 then
+            if u.team == "ally" and cx <= C.campMaxX then
                 self.grid:Trample(u.x, u.y, 1, u.id, self.time)
             end
         end
@@ -609,6 +680,7 @@ function Sim:Move(u, tx, ty, dt)
         if u.blocked > 0.35 and u.gateSlots == 0 then
             local fx, fy = dx / dist, dy / dist
             local lx, ly = -fy, fx
+            -- 侧移方向偏向让路：轻单位优先向"人少"的一侧闪避（V3.2 §1.5）。
             local candidates = {
                 { fx, fy, 0 }, { fx * 0.7 + lx, fy * 0.7 + ly, 1 }, { fx * 0.7 - lx, fy * 0.7 - ly, 1 },
                 { lx, ly, 1 }, { -lx, -ly, 1 }, { fx * 0.4 + lx * 1.2, fy * 0.4 + ly * 1.2, 1 },
@@ -673,6 +745,152 @@ function Sim:ApplyCommand(u)
     u.commandVersion = self.commandVersion
     u.path, u.repath = {}, 0
 end
+
+------------------------------------------------------------------
+-- 农民采集 AI（V3.2 §3）
+------------------------------------------------------------------
+
+-- 释放农民占用的采集位与目标。
+function Sim:ReleaseSlot(u)
+    if u.targetResource then
+        local res = self.grid:FindResource(u.targetResource)
+        if res and res.reserved > 0 then res.reserved = res.reserved - 1 end
+    end
+    u.targetResource, u.targetCell = nil, nil
+end
+
+-- 找到可抵达、有空闲采集位、距离最近的资源点及其相邻采集格。
+function Sim:FindGatherTarget(u)
+    local best, bestDist, bestCell = nil, math.huge, nil
+    for _, res in ipairs(self.grid.resources) do
+        if res.stock > 0 and res.reserved < res.slots then
+            for _, c in ipairs(res.cells) do
+                for _, adj in ipairs(self.grid:AdjacentWalkable(c.x, c.y)) do
+                    local d = (adj.x - u.x)^2 + (adj.y - u.y)^2
+                    -- 已枯竭或路径不通的点直接跳过。
+                    if d < bestDist then
+                        local path = self.grid:Path(math.floor(u.x), math.floor(u.y), adj.x, adj.y, 1)
+                        if path then best, bestDist, bestCell = res, d, adj end
+                    end
+                end
+            end
+        end
+    end
+    return best, bestCell
+end
+
+-- 通行时间最短的仓库相邻格（V3.2 §3.3 运输阶段）。
+function Sim:FindWarehouse(u)
+    local bestCell, bestCost = nil, math.huge
+    for _, b in ipairs(self.grid.buildings) do
+        if b.kind == "warehouse" then
+            for _, adj in ipairs(self.grid:AdjacentWalkable(b.x, b.y)) do
+                local path = self.grid:Path(math.floor(u.x), math.floor(u.y), adj.x, adj.y, 1)
+                if path then
+                    local cost = 0
+                    for _, p in ipairs(path) do cost = cost + C.trailCost[self.grid:TrailLevel(p.x, p.y) + 1] end
+                    if cost < bestCost then bestCell, bestCost = adj, cost end
+                end
+            end
+        end
+    end
+    return bestCell
+end
+
+function Sim:FarmerIdle(u, dt)
+    u.state = "待命"
+    u.waitTimer = u.waitTimer - dt
+    -- 在农民营附近缓慢游荡，不堵路（V3.2 §3.4）。
+    u.wanderAngle = u.wanderAngle + dt * 0.7
+    local wx = u.homeX + math.cos(u.wanderAngle) * 1.6
+    local wy = u.homeY + math.sin(u.wanderAngle * 0.8) * 1.2
+    self:Move(u, wx, wy, dt * 0.5)
+end
+
+function Sim:FarmerGoal(u, dt)
+    local cell = u.cellX
+    -- 无仓库且无目标时进入待命；每 gatherRetry 秒复查一次。
+    if u.task == "idle" or u.task == "wait" then
+        if u.waitTimer > 0 then self:FarmerIdle(u, dt); return end
+        u.waitTimer = C.gatherRetry
+        local res, adj = self:FindGatherTarget(u)
+        if res and adj then
+            res.reserved = res.reserved + 1
+            u.targetResource, u.targetCell = res.id, adj
+            u.task, u.path = "toResource", {}
+        else
+            u.task = "wait"
+            self:FarmerIdle(u, dt)
+            return
+        end
+    end
+
+    if u.task == "toResource" then
+        local res = u.targetResource and self.grid:FindResource(u.targetResource)
+        if not res or res.stock <= 0 or not u.targetCell then
+            self:ReleaseSlot(u); u.task, u.waitTimer = "wait", 0
+            return
+        end
+        u.state = "前往资源点"
+        local d = math.abs(u.x - u.targetCell.x) + math.abs(u.y - u.targetCell.y)
+        if d < 0.4 then
+            u.task, u.gatherTimer = "gathering", C.resources[res.kind].gather
+        else
+            self:Move(u, u.targetCell.x, u.targetCell.y, dt)
+        end
+        return
+    end
+
+    if u.task == "gathering" then
+        local res = u.targetResource and self.grid:FindResource(u.targetResource)
+        if not res or res.stock <= 0 then
+            self:ReleaseSlot(u); u.task, u.waitTimer = "wait", 0
+            return
+        end
+        u.state = "采集中"
+        u.gatherTimer = u.gatherTimer - dt
+        if u.gatherTimer <= 0 then
+            -- 每次采集扣 1 次储量、记 1 次资源，不重复结算（V3.2 §4.2）。
+            res.stock = res.stock - 1
+            local def = C.resources[res.kind]
+            u.carry, u.carryKind = def.value, res.kind
+            self:ReleaseSlot(u)
+            u.task, u.path = "toWarehouse", {}
+            if res.stock <= 0 then
+                self.grid:RemoveResource(res)
+                self:Notify(def.name .. "资源点已枯竭，地块恢复为普通营地格")
+            end
+        end
+        return
+    end
+
+    if u.task == "toWarehouse" then
+        local adj = self:FindWarehouse(u)
+        if not adj then
+            -- 所有仓库均不可达：保留携带资源原地待命（V3.2 §5.3）。
+            u.state = "等待仓库"
+            u.waitTimer = u.waitTimer - dt
+            if u.waitTimer <= 0 then u.waitTimer = C.gatherRetry end
+            return
+        end
+        u.state = "运送资源"
+        local d = math.abs(u.x - adj.x) + math.abs(u.y - adj.y)
+        if d < 0.4 then
+            self.gold = self.gold + u.carry
+            self.harvested = self.harvested + u.carry
+            self:Effect(u.x, u.y, "upgrade", { 240, 210, 130 }, 0.4)
+            u.carry, u.carryKind = 0, nil
+            u.task, u.waitTimer = "wait", 0
+        else
+            self:Move(u, adj.x, adj.y, dt)
+        end
+        return
+    end
+end
+
+------------------------------------------------------------------
+-- 战斗单位 AI
+------------------------------------------------------------------
 
 function Sim:AllyGoal(u, dt)
     if not u.passedGate then
@@ -749,20 +967,46 @@ function Sim:EnemyGoal(u, dt)
     end
 end
 
+------------------------------------------------------------------
+-- 生产
+------------------------------------------------------------------
+
+-- 采集位总余量：决定农民营是否继续产兵（按需产兵，V3.2 §3.1）。
+function Sim:FreeGatherSlots()
+    local free = 0
+    for _, res in ipairs(self.grid.resources) do
+        if res.stock > 0 then free = free + math.max(0, res.slots - res.reserved) end
+    end
+    return free
+end
+
 function Sim:Production(dt)
     for _, b in ipairs(self.grid.buildings) do
         local def = C.buildings[b.kind]
         b.shot = math.max(0, b.shot - dt)
         if def.unit then
             b.timer = math.min(def.interval, b.timer + dt)
-            if b.timer >= def.interval and self:ArmyCount() < C.armyLimit then
-                local size = C.units[def.unit].size
-                local spot = self:PickSpawn(self.grid:SpawnSpot(b, size), size)
-                if spot then
-                    self:AddUnit(def.unit, "ally", spot.x + (size-1)*0.5, spot.y + (size-1)*0.5)
-                    self.produced = self.produced + 1
-                    b.timer = 0
-                    if self.produced <= 5 or self.produced % 10 == 0 then print("[生产] " .. def.name .. "产出，累计" .. self.produced) end
+            if b.timer >= def.interval then
+                local canSpawn = false
+                if def.unit == "farmer" then
+                    -- 按需产兵：可用采集位 > 存活农民数时才继续生产。
+                    canSpawn = self:FreeGatherSlots() > self:FarmerCount()
+                        and self:FarmerCount() < C.farmerLimit
+                else
+                    canSpawn = self:ArmyCount() < C.armyLimit
+                end
+                if canSpawn then
+                    local size = C.units[def.unit].size
+                    local spot = self:PickSpawn(self.grid:SpawnSpot(b, size), size)
+                    if spot then
+                        local u = self:AddUnit(def.unit, "ally", spot.x + (size-1)*0.5, spot.y + (size-1)*0.5)
+                        u.homeX, u.homeY = u.x, u.y
+                        self.produced = self.produced + 1
+                        b.timer = 0
+                        if self.produced <= 5 or self.produced % 10 == 0 then
+                            print("[生产] " .. def.name .. "产出，累计" .. self.produced)
+                        end
+                    end
                 end
             end
         elseif b.kind == "tower" and b.shot <= 0 then
@@ -782,8 +1026,7 @@ function Sim:Production(dt)
     end
 end
 
--- 路径阻断检测：任意一座产兵建筑若在它周围找不到能通往城门的落点，就记为阻断。
--- 结果供界面在兵营上方显示红色提示，避免单位永久卡住却毫无反馈。
+-- 路径阻断检测：产兵建筑若找不到能通往城门的落点，就记为阻断（界面红色提示）。
 function Sim:CheckPathBlocked()
     local blocked = 0
     for _, b in ipairs(self.grid.buildings) do
@@ -794,7 +1037,10 @@ function Sim:CheckPathBlocked()
             for _, spot in ipairs(self.grid:SpawnSpot(b, size)) do
                 local offset = (size - 1) * 0.5
                 local sx, sy = spot.x + offset, spot.y + offset
-                local path = self.grid:Path(math.floor(sx), math.floor(sy), C.wallCol - 1, C.gateTop, size, size == 2)
+                -- 农民只需在营地内可达资源点，不要求通到城门。
+                local goalX = def.unit == "farmer" and C.campMaxX or (C.wallCol - 1)
+                local goalY = def.unit == "farmer" and math.max(2, math.min(C.rows - 1, math.floor(sy))) or C.gateTop
+                local path = self.grid:Path(math.floor(sx), math.floor(sy), goalX, goalY, size, size == 2)
                 if path then reachable = true; break end
             end
             if not reachable then blocked = blocked + 1 end
@@ -803,9 +1049,12 @@ function Sim:CheckPathBlocked()
     self.pathBlocked = blocked
 end
 
--- 记录第一名士兵的真实行进轨迹：第一次出门前一直跟随它，出城或阵亡后定格，
--- 供战场用实线显示"实际路线"。
+------------------------------------------------------------------
+-- 路线反馈与道路统计
+------------------------------------------------------------------
+
 function Sim:TrackRoute(u)
+    if u.worker then return end
     if u.passedGate then
         if self.leadId == u.id then self.leadId = nil end
         return
@@ -821,8 +1070,6 @@ function Sim:TrackRoute(u)
     end
 end
 
--- 预测路线：从兵营出口到城门的 A* 路径，用于摆放建筑时的虚线预览。
--- 结果按地图版本缓存，避免每帧重复寻路。
 function Sim:PreviewRoute()
     if self.previewCache and self.previewCache.version == self.grid.version then
         return self.previewCache.path
@@ -830,7 +1077,7 @@ function Sim:PreviewRoute()
     local path = nil ---@type table[]?
     for _, b in ipairs(self.grid.buildings) do
         local def = C.buildings[b.kind]
-        if def.unit then
+        if def.unit and def.unit ~= "farmer" then
             local size = C.units[def.unit].size
             local spots = self.grid:SpawnSpot(b, size)
             if spots[1] then
@@ -849,11 +1096,11 @@ end
 
 function Sim:SurveyRoad()
     local columns, qualified, tally = 0, 0, { 0, 0, 0, 0, 0 }
-    for x = 2, C.wallCol - 1 do
+    for x = 2, C.campMaxX do
         local best = -1
         for y = C.gateTop - 1, C.gateTop + C.gateWidth do
             local cell = self.grid:Get(x, y)
-            if cell and cell.building == 0 then
+            if cell and not cell.solid and cell.resource == 0 then
                 local level = self.grid:TrailLevel(x, y)
                 if level > best then best = level end
             end
@@ -871,6 +1118,10 @@ function Sim:SurveyRoad()
     self.roadLevelValue = mode
     self.roadProgress = columns > 0 and qualified / columns or 0
 end
+
+------------------------------------------------------------------
+-- 主循环
+------------------------------------------------------------------
 
 function Sim:Step(dt)
     if self.paused or self.phase == "victory" or self.phase == "defeat" then return end
@@ -902,11 +1153,15 @@ function Sim:Step(dt)
         if self:Active(u) then
             u.cooldown, u.repath = math.max(0, u.cooldown-dt), math.max(0, u.repath-dt)
             u.flash, u.moving = math.max(0, u.flash-dt), false
-            if u.team == "ally" then self:ApplyCommand(u); self:ProcessUnit(u); self:TrackRoute(u) end
-            local target = self:Target(u)
-            if target and (u.passedGate or u.team == "enemy") then self:Combat(u, target, dt)
-            elseif u.team == "ally" then self:AllyGoal(u, dt)
-            else self:EnemyGoal(u, dt) end
+            if u.worker then
+                self:FarmerGoal(u, dt)
+            else
+                if u.team == "ally" then self:ApplyCommand(u); self:ProcessUnit(u); self:TrackRoute(u) end
+                local target = self:Target(u)
+                if target and (u.passedGate or u.team == "enemy") then self:Combat(u, target, dt)
+                elseif u.team == "ally" then self:AllyGoal(u, dt)
+                else self:EnemyGoal(u, dt) end
+            end
             if self.phase == "victory" or self.phase == "defeat" then return end
             if u.blocked > 0.7 then self.blockedCount = self.blockedCount + 1 end
         end
@@ -941,7 +1196,9 @@ function Sim:Step(dt)
     if self.diagnosticTimer >= 15 then
         self.diagnosticTimer = 0
         self:CheckPathBlocked()
-        print(string.format("[状态] %s 第%d波 部队%d 敌人%d 拥堵%d 阻断%d 城墙%.0f", self.phase, self.wave, self:ArmyCount(), self:EnemyCount(), self.blockedCount, self.pathBlocked, self.wallHp))
+        print(string.format("[状态] %s 第%d波 部队%d 农民%d 敌人%d 拥堵%d 阻断%d 城墙%.0f 资源%.0f",
+            self.phase, self.wave, self:ArmyCount(), self:FarmerCount(), self:EnemyCount(),
+            self.blockedCount, self.pathBlocked, self.wallHp, self.gold))
     end
     self.roadTimer = self.roadTimer + dt
     if self.roadTimer >= 1 then
