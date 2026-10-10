@@ -4,13 +4,22 @@ local Config = {
     cols = 33, rows = 12, wallCol = 23, gateTop = 5, gateWidth = 3,
     -- 刚性区域定义（V3.2 §1.4）：营地 1..22 列，城墙 23 列，荒野 24..33 列。
     campMinX = 1, campMaxX = 22, wildMinX = 24, wildMaxX = 33,
-    developTime = 90, startGold = 420, wallHealth = 800,
+    developTime = 90, startGold = 480, wallHealth = 800,
+    -- 敌人对城墙的伤害倍率：单位间战斗保持原数值，但城墙是工事而非纸片。
+    -- 不加这个系数时，13 个掠夺者约 80dps，10 秒就能拆掉 800 血城墙，
+    -- 导致"第一波必须建箭塔"成为唯一解。
+    wallDamageScale = 0.45,
+    -- 护甲减伤下限：护甲是减法，但最多只能把伤害压到原始的 20%。
+    -- 否则"盾牌 +30 护甲"会把掠夺者(8 伤害)直接归零，1-3 波失去全部威胁。
+    armorFloor = 0.20,
     -- 被动产出只作兜底启动资金，经济主力来自农民采集（V3.2 §7.1）。
-    passiveIncome = 0.5, commandCost = 15, commandCooldown = 8,
+    passiveIncome = 1.2, commandCost = 15, commandCooldown = 8,
     -- 5 人上限只针对战斗单位；农民不占战斗人口（V3.2 §二）。
     armyLimit = 5, fixedStep = 1 / 30,
     -- 道路既不能铺设也不能拆除，完全由部队在营地内反复踩踏累积而成。
-    trailThresholds = { 3, 8, 16, 28 },
+    -- 阈值按"经过次数"计；单局里士兵只出城一次，农民往返才持续踩踏，
+    -- 所以门槛定得比"纯士兵通行"低，保证一局内真能看到道路升级。
+    trailThresholds = { 2, 6, 12, 22 },
     trailSpeed = { 1.0, 1.12, 1.30, 1.55, 1.85 },
     -- 寻路代价即"每格通行时间"，与 trailSpeed 互为倒数（V3.2 §1.2）。
     trailCost = { 1.0, 0.85, 0.72, 0.60, 0.50 },
@@ -131,22 +140,24 @@ Config.heavyProcessings = { shield = true, forge = true, stable = true }
 ---@type table<string, FrontierTemplate>
 Config.units = {
     -- 我方战斗单位：只有民兵与大象两种"原料"，装备差异全部由工序加工产生。
-    militia = { name = "民兵", hp = 45, armor = 0, damage = 7, range = 0.95,
+    -- 民兵 dps 约 9，5 人满编 45 dps；配合箭塔足以在第一波速清，避免僵持。
+    militia = { name = "民兵", hp = 45, armor = 0, damage = 10, range = 0.95,
         speed = 1.45, interval = 1.1, size = 1, color = { 238, 172, 88 }, sight = 6 },
-    elephant = { name = "大象兵", hp = 340, armor = 3, damage = 30, range = 1.8, aoe = 1.65,
+    elephant = { name = "大象兵", hp = 340, armor = 3, damage = 38, range = 1.8, aoe = 1.65,
         speed = 0.65, interval = 1.7, size = 2, color = { 183, 161, 214 }, sight = 7 },
     -- 采集单位：永久限制在营地内，不占战斗人口，不参与战斗。
+    -- 移速偏快（1.55）以缩短往返周期，让采集收入在发育期内就有存在感。
     farmer = { name = "农民", hp = 30, armor = 0, damage = 0, range = 0,
-        speed = 1.25, interval = 1, size = 1, color = { 232, 196, 132 }, sight = 4,
+        speed = 1.55, interval = 1, size = 1, color = { 232, 196, 132 }, sight = 4,
         worker = true },
-    -- 敌军沿用原有模板。
-    raider = { name = "掠夺者", hp = 42, armor = 0, damage = 8, range = 0.95,
-        speed = 1.2, interval = 1.3, size = 1, color = { 205, 101, 87 }, sight = 6 },
-    brute = { name = "重装掠夺者", hp = 110, armor = 2, damage = 15, range = 1.1,
+    -- 敌军：血量偏脆便于速清，但伤害必须够高，否则被护甲一压就完全没威胁。
+    raider = { name = "掠夺者", hp = 34, armor = 0, damage = 11, range = 0.95,
+        speed = 1.05, interval = 1.25, size = 1, color = { 205, 101, 87 }, sight = 6 },
+    brute = { name = "重装掠夺者", hp = 120, armor = 2, damage = 22, range = 1.1,
         speed = 0.8, interval = 1.6, size = 1, color = { 171, 88, 79 }, sight = 6 },
-    shooter = { name = "敌方射手", hp = 35, armor = 0, damage = 8, range = 4.5, ranged = true,
+    shooter = { name = "敌方射手", hp = 35, armor = 0, damage = 11, range = 4.5, ranged = true,
         speed = 0.9, interval = 1.6, size = 1, color = { 213, 129, 107 }, sight = 7 },
-    boss = { name = "破城巨兽", hp = 1500, armor = 3, damage = 30, range = 2.0, aoe = 2.1,
+    boss = { name = "破城巨兽", hp = 1300, armor = 3, damage = 40, range = 2.0, aoe = 2.1,
         speed = 0.55, interval = 2, size = 2, color = { 215, 93, 82 }, sight = 8 },
 }
 
@@ -159,10 +170,12 @@ Config.units = {
 ---@field color number[]
 
 ---@type table<string, FrontierResourceDef>
+-- 采集单次耗时按 V3.2 §3.3 定为森林 3 秒 / 矿物 5 秒；储量下调，
+-- 让"资源点会枯竭、要不断找新点"的节奏在单局内真正成立。
 Config.resources = {
-    forest = { name = "森林", value = 1, stockPerCell = 20, gather = 3.0, count = { 3, 4 },
+    forest = { name = "森林", value = 1, stockPerCell = 10, gather = 3.0, count = { 3, 4 },
         color = { 92, 150, 88 } },
-    mineral = { name = "矿物", value = 2, stockPerCell = 30, gather = 5.0, count = { 2, 2 },
+    mineral = { name = "矿物", value = 2, stockPerCell = 15, gather = 5.0, count = { 2, 2 },
         color = { 158, 166, 182 } },
 }
 -- 采集位规则：标准 2×2 资源点 2 个采集位；森林按"每剩余 2 格 1 位、最少 1 位"。

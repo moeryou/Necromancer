@@ -112,9 +112,6 @@ local Grid = require "Frontier.Grid"
 ---@field gateUsed number
 ---@field blockedCount number
 ---@field pathBlocked number
----@field actualRoute table[]
----@field leadId number?
----@field previewCache? table
 ---@field diagnosticTimer number
 ---@field roadTimer number
 ---@field roadProgress number
@@ -150,8 +147,6 @@ function Sim:Init()
     self.notice = "民兵营与农民营已就绪。建仓库、让农民采集资源，再规划你的生产线。"
     self.noticeTime, self.gateUsed, self.blockedCount = 8, 0, 0
     self.pathBlocked = 0
-    self.actualRoute = {} ---@type table[]
-    self.leadId = nil ---@type number?
     self.diagnosticTimer = 0
     self.roadTimer, self.roadProgress, self.roadLevelValue = 0, 0, 0
     print("[游戏] 单机初始化：双产线（民兵/农民）+ 资源采集；被动 0.5/秒，初始 " .. C.startGold)
@@ -377,7 +372,9 @@ function Sim:StartWave(early)
     end
     self.phase, self.phaseTime, self.spawnTimer = "battle", 0, 0.2
     self.waveQueue = {}
-    for i = 1, 8 + self.wave * 5 do
+    -- 波次规模：原 8+wave*5 到第 3 波就有 23 个敌人，与我方 5 人上限严重失衡。
+    -- 收敛到 7+wave*4 后，城墙会真正承压，但不会出现"打不完也打不死"的僵持。
+    for i = 1, 7 + self.wave * 4 do
         local kind = "raider"
         if i % 5 == 0 then kind = "brute"
         elseif i % 4 == 0 then kind = "shooter" end
@@ -423,7 +420,9 @@ function Sim:Damage(target, amount)
     -- 站在 3 级及以上硬化路面上的单位额外减伤 10%（"养路 = 提升战力"）。
     local level = self.grid:TrailLevel(target.x, target.y)
     local reduction = C.trailDamageReduction[level + 1] or 0
-    local dealt = math.max(1, amount - target.stats.armor) * (1 - reduction)
+    -- 护甲是减法，但设有减伤下限，避免高护甲把敌人伤害完全归零。
+    local afterArmor = math.max(amount * C.armorFloor, amount - target.stats.armor)
+    local dealt = math.max(1, afterArmor) * (1 - reduction)
     target.hp = target.hp - dealt
     target.flash = 0.12
     if target.hp <= 0 then
@@ -907,10 +906,15 @@ function Sim:AllyGoal(u, dt)
     end
     self:ApplyCommand(u)
     if self.command == "attack" then
+        -- 进攻推进到城墙外一小段即停，把敌人放进视野后由 Combat 接管。
+        -- 若一路冲到敌人出生点，近战单位会撞上城墙、与远程敌人贴脸互啃，
+        -- 既打不到也走不掉，形成长时间僵持。
         u.state = "向右推进"
-        self:Move(u, C.cols - 1, u.y, dt)
+        self:Move(u, C.wallCol + 4.5, u.y, dt)
     else
-        local x = C.wallCol + 2.8
+        -- 驻守位置必须贴住城门：敌人停在墙外约 wallCol+0.8 处磨墙，
+        -- 若我军站在 wallCol+2.8，间距 2.0 远超近战射程 0.95，会站着看敌人拆墙。
+        local x = C.wallCol + 1.8
         local y = math.max(2 + u.size * 0.5, math.min(C.rows - 1 - u.size * 0.5, u.y))
         if u.gear.stable and self.command == "defend" then y = 6 + math.sin(self.time * 0.65 + u.id) * 2 end
         u.state = self.command == "defend" and "固守防线" or "城外待命"
@@ -926,14 +930,20 @@ function Sim:Combat(u, target, dt)
     u.state = "自主交战"
     if dist <= reach then self:Attack(u, target) end
     if t.ranged then
-        local desired = reach * (u.gear.stable and 0.85 or 0.9)
-        if dist < desired * 0.65 then
-            self:Move(u, u.x - dx / math.max(dist, 0.1) * 1.6, u.y - dy / math.max(dist, 0.1) * 1.6, dt)
-        elseif dist > reach then
-            self:Move(u, target.x - dx / math.max(dist, 0.1) * desired, target.y - dy / math.max(dist, 0.1) * desired, dt)
-        elseif u.gear.stable then
-            local flank = math.sin(self.time * 0.8 + u.id) > 0 and 1 or -1
-            self:Move(u, u.x, u.y + flank * 0.8, dt)
+        if u.team == "enemy" then
+            -- 敌方远程不风筝：它的目标是城墙，边打边压上。
+            -- 若停在射程边缘，遇上高护甲的我军会变成"双方都够不到对方"的永久僵持。
+            if dist > reach * 0.55 then self:Move(u, target.x, target.y, dt) end
+        else
+            local desired = reach * (u.gear.stable and 0.85 or 0.9)
+            if dist < desired * 0.65 then
+                self:Move(u, u.x - dx / math.max(dist, 0.1) * 1.6, u.y - dy / math.max(dist, 0.1) * 1.6, dt)
+            elseif dist > reach then
+                self:Move(u, target.x - dx / math.max(dist, 0.1) * desired, target.y - dy / math.max(dist, 0.1) * desired, dt)
+            elseif u.gear.stable then
+                local flank = math.sin(self.time * 0.8 + u.id) > 0 and 1 or -1
+                self:Move(u, u.x, u.y + flank * 0.8, dt)
+            end
         end
     elseif dist > reach then
         if u.team == "ally" and (self.command == "defend" or self.command == "wait") then
@@ -954,7 +964,8 @@ function Sim:EnemyGoal(u, dt)
     if u.x <= desiredX + t.range * 0.2 then
         u.state = "攻击城墙"
         if u.cooldown <= 0 then
-            self.wallHp = math.max(0, self.wallHp - t.damage)
+            -- 城墙吃伤害系数：否则 13 个掠夺者约 80dps，10 秒拆掉整面墙。
+            self.wallHp = math.max(0, self.wallHp - t.damage * C.wallDamageScale)
             u.cooldown = t.interval
             self:Effect(C.wallCol, u.y, "aoe", C.units[u.kind].color, t.aoe or 0.5)
             if self.wallHp <= 0 then self.phase = "defeat"; self:Notify("城墙被攻破。重新规划生产线，再战一次。"); end
@@ -1053,43 +1064,6 @@ end
 -- 路线反馈与道路统计
 ------------------------------------------------------------------
 
-function Sim:TrackRoute(u)
-    if u.worker then return end
-    if u.passedGate then
-        if self.leadId == u.id then self.leadId = nil end
-        return
-    end
-    if self.leadId == nil and #self.actualRoute == 0 then self.leadId = u.id end
-    if u.id ~= self.leadId then return end
-    local px, py = math.floor(u.x + 0.5), math.floor(u.y + 0.5)
-    local last = self.actualRoute[#self.actualRoute]
-    if not last or last.x ~= px or last.y ~= py then
-        if #self.actualRoute < 512 then
-            self.actualRoute[#self.actualRoute + 1] = { x = px, y = py }
-        end
-    end
-end
-
-function Sim:PreviewRoute()
-    if self.previewCache and self.previewCache.version == self.grid.version then
-        return self.previewCache.path
-    end
-    local path = nil ---@type table[]?
-    for _, b in ipairs(self.grid.buildings) do
-        local def = C.buildings[b.kind]
-        if def.unit and def.unit ~= "farmer" then
-            local size = C.units[def.unit].size
-            local spots = self.grid:SpawnSpot(b, size)
-            if spots[1] then
-                path = self.grid:Path(spots[1].x, spots[1].y, C.wallCol - 1, C.gateTop, size, size == 2)
-                if path then break end
-            end
-        end
-    end
-    self.previewCache = { version = self.grid.version, path = path }
-    return path
-end
-
 function Sim:RoadLevel()
     return self.roadLevelValue
 end
@@ -1156,7 +1130,7 @@ function Sim:Step(dt)
             if u.worker then
                 self:FarmerGoal(u, dt)
             else
-                if u.team == "ally" then self:ApplyCommand(u); self:ProcessUnit(u); self:TrackRoute(u) end
+                if u.team == "ally" then self:ApplyCommand(u); self:ProcessUnit(u) end
                 local target = self:Target(u)
                 if target and (u.passedGate or u.team == "enemy") then self:Combat(u, target, dt)
                 elseif u.team == "ally" then self:AllyGoal(u, dt)

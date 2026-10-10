@@ -139,52 +139,10 @@ function Battlefield:DrawGround(vg, s, ox, oy, pal)
     end
 end
 
--- 预测路线（虚线）与实际行进路线（实线）。实际路线优先，只在还没有士兵
--- 真正走过时显示预测，避免两条线互相干扰。
+-- 路线不再绘制：实线/虚线压在战场上会与单位、道路纹理互相干扰，观感很差。
+-- 这里只保留"路径被堵死"的红色警示，那才是玩家必须看见的信息。
 function Battlefield:DrawRoute(vg, s, ox, oy)
     local sim = self.sim
-    local function center(p) return ox + (p.x - 0.5) * s, oy + (p.y - 0.5) * s end
-    local actual = sim.actualRoute
-    if #actual >= 2 then
-        nvgBeginPath(vg)
-        local x0, y0 = center(actual[1])
-        nvgMoveTo(vg, x0, y0)
-        for i = 2, #actual do
-            local x, y = center(actual[i])
-            nvgLineTo(vg, x, y)
-        end
-        nvgStrokeColor(vg, nvgRGBA(250, 228, 150, 235))
-        nvgStrokeWidth(vg, math.max(1.5, s * 0.10))
-        nvgLineJoin(vg, NVG_ROUND); nvgLineCap(vg, NVG_ROUND)
-        nvgStroke(vg)
-    else
-        local path = sim:PreviewRoute()
-        if path and #path >= 2 then
-            -- 手绘虚线：逐段按比例留空，避免依赖未暴露的 nvgDash。
-            local dash, gap = s * 0.24, s * 0.20
-            nvgBeginPath(vg)
-            for i = 2, #path do
-                local ax, ay = center(path[i - 1])
-                local bx, by = center(path[i])
-                local dx, dy = bx - ax, by - ay
-                local len = math.sqrt(dx * dx + dy * dy)
-                if len > 0 then
-                    local ux, uy = dx / len, dy / len
-                    local t = 0
-                    while t < len do
-                        local e = math.min(t + dash, len)
-                        nvgMoveTo(vg, ax + ux * t, ay + uy * t)
-                        nvgLineTo(vg, ax + ux * e, ay + uy * e)
-                        t = t + dash + gap
-                    end
-                end
-            end
-            nvgStrokeColor(vg, nvgRGBA(255, 244, 190, 170))
-            nvgStrokeWidth(vg, math.max(1, s * 0.08))
-            nvgLineCap(vg, NVG_ROUND)
-            nvgStroke(vg)
-        end
-    end
     -- 路径阻断提示：在被堵死的产兵建筑上方画红色警示。
     for _, b in ipairs(sim.grid.buildings) do
         local def = C.buildings[b.kind]

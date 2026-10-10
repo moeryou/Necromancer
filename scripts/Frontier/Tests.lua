@@ -45,7 +45,9 @@ function Start()
         ------------------------------------------------------------------
         Check(C.buildings.farmerBarracks.w==2 and C.buildings.farmerBarracks.cost==60,"农民营 2×2 / 60 资源")
         Check(C.buildings.warehouse.w==1 and C.buildings.warehouse.blocking==false,"仓库 1×1 且不阻挡通行")
-        Check(C.passiveIncome==0.5 and C.startGold==420,"被动 0.5/秒、初始 420 资源")
+        Check(C.passiveIncome==1.2 and C.startGold==480,"被动 1.2/秒、初始 480 资源")
+        Check(C.wallDamageScale>0 and C.wallDamageScale<1,"城墙设有伤害系数，避免被秒拆")
+        Check(C.armorFloor>0,"护甲设有减伤下限，避免高护甲把伤害归零")
         Check(C.units.farmer.worker==true,"农民标记为采集单位")
         Check(C.resources.forest.value==1 and C.resources.mineral.value==2,"森林1值 / 矿物2值")
         Check(C.heavyProcessings.shield and C.heavyProcessings.forge and C.heavyProcessings.stable,

@@ -94,7 +94,7 @@ function Interface:Create()
                 Label("边 境 工 事",23,P.text,{ fontWeight="bold" }),
                 Label("FRONTIER  /  间接指挥 · 波次塔防",9,P.muted,{ letterSpacing=1.5 }),
             } },
-            resourceCard("资源  /  被动+0.5每秒 · 采集为主","gold",P.gold),
+            resourceCard("资源  /  被动+"..C.passiveIncome.."每秒 · 采集为主","gold",P.gold),
             UI.Panel { width=self.narrow and 120 or 174,height=52,paddingHorizontal=14,justifyContent="center",gap=5,
                 borderLeftWidth=1,borderLeftColor=P.line,children={
                     Label("城墙完整度",9,P.muted),
