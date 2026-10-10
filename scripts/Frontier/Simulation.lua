@@ -20,7 +20,6 @@ local Grid = require "Frontier.Grid"
 ---@field blocked number
 ---@field state string
 ---@field upgraded boolean
----@field returning boolean
 ---@field commandVersion number
 ---@field passedGate boolean
 ---@field ticket number
@@ -30,8 +29,6 @@ local Grid = require "Frontier.Grid"
 ---@field moving boolean
 ---@field flash number
 ---@field active boolean
----@field homeX number
----@field homeY number
 
 ---@class FrontierShot
 ---@field x number
@@ -78,9 +75,7 @@ local Grid = require "Frontier.Grid"
 ---@field noticeTime number
 ---@field gateUsed number
 ---@field blockedCount number
----@field revision number
 ---@field diagnosticTimer number
----@field bossSeen boolean
 ---@field roadTimer number
 ---@field roadProgress number
 ---@field roadLevelValue number
@@ -108,16 +103,17 @@ function Sim:Init()
     self.time, self.paused, self.speed = 0, false, 1
     self.nextUnit, self.nextTicket = 1, 1
     self.kills, self.converted, self.produced = 0, 0, 0
+    -- 每帧重算一次双方兵力，供生产/转职/胜负判定复用，避免在 O(N) 循环里反复全表扫描。
+    self.allyCount, self.enemyCount = 0, 0
     self.notice = "首座民兵营已就绪。让部队在营地与城门之间反复行军，道路会自己长出来。"
-    self.noticeTime, self.gateUsed, self.blockedCount, self.revision = 8, 0, 0, 1
-    self.diagnosticTimer, self.bossSeen = 0, false
+    self.noticeTime, self.gateUsed, self.blockedCount = 8, 0, 0
+    self.diagnosticTimer = 0
     self.roadTimer, self.roadProgress, self.roadLevelValue = 0, 0, 0
     print("[游戏] 单机初始化，90秒发育，3波普通敌军后直接进入Boss战；兵力上限" .. C.armyLimit)
 end
 
 function Sim:Notify(text)
     self.notice, self.noticeTime = text, 4
-    self.revision = self.revision + 1
     print("[操作] " .. text)
 end
 
@@ -125,16 +121,23 @@ function Sim:Active(u)
     return u.active and u.hp > 0
 end
 
+-- 双方兵力在每帧开头统一统计（见 RefreshCounts），循环内直接读缓存字段。
 function Sim:ArmyCount()
-    local n = 0
-    for _, u in ipairs(self.units) do if self:Active(u) and u.team == "ally" then n = n + 1 end end
-    return n
+    return self.allyCount
 end
 
 function Sim:EnemyCount()
-    local n = 0
-    for _, u in ipairs(self.units) do if self:Active(u) and u.team == "enemy" then n = n + 1 end end
-    return n
+    return self.enemyCount
+end
+
+function Sim:RefreshCounts()
+    local ally, enemy = 0, 0
+    for _, u in ipairs(self.units) do
+        if u.active and u.hp > 0 then
+            if u.team == "ally" then ally = ally + 1 else enemy = enemy + 1 end
+        end
+    end
+    self.allyCount, self.enemyCount = ally, enemy
 end
 
 function Sim:AddUnit(kind, team, x, y)
@@ -142,13 +145,16 @@ function Sim:AddUnit(kind, team, x, y)
     local u = { id = self.nextUnit, kind = kind, team = team, x = x, y = y,
         hp = t.hp, maxHp = t.hp, armor = t.armor, size = t.size, cooldown = 0,
         path = {}, pathVersion = 0, goalX = -1, goalY = -1, repath = 0, blocked = 0,
-        state = "行军", upgraded = kind ~= "militia", returning = false,
+        state = "行军", upgraded = kind ~= "militia",
         commandVersion = 0, passedGate = team ~= "ally", ticket = 0,
         gateLane = 0, gateSlots = 0, facing = team == "ally" and 1 or -1,
-        moving = false, flash = 0, active = true,
-        homeX = x, homeY = y }
+        moving = false, flash = 0, active = true }
     self.nextUnit = self.nextUnit + 1
-    table.insert(self.units, u)
+    self.units[#self.units + 1] = u
+    if u.active and u.hp > 0 then
+        if team == "ally" then self.allyCount = self.allyCount + 1
+        else self.enemyCount = self.enemyCount + 1 end
+    end
     return u
 end
 
@@ -189,7 +195,7 @@ function Sim:StartWave(early)
     if early and self.phaseTime > 0 then
         local reward = math.floor(self.phaseTime * 0.65)
         self.gold = self.gold + reward
-        self:Notify("提前迎敌！奖励 " .. reward .. " 基础资源；请及时召回采集部队")
+        self:Notify("提前迎敌！奖励 " .. reward .. " 基础资源；趁敌人还没到，先摆好产线")
     end
     self.phase, self.phaseTime, self.spawnTimer = "battle", 0, 0.2
     self.waveQueue = {}
@@ -200,14 +206,12 @@ function Sim:StartWave(early)
         table.insert(self.waveQueue, kind)
     end
     self.commandVersion = self.commandVersion + 1
-    self.revision = self.revision + 1
     print("[波次] 普通波次 " .. self.wave .. "，敌军总量 " .. #self.waveQueue)
 end
 
 function Sim:StartBoss()
     self.phase, self.phaseTime, self.wave, self.spawnTimer = "boss", 0, 4, 0.1
     self.waveQueue = { "boss", "brute", "shooter", "brute", "shooter", "brute" }
-    self.bossSeen = false
     self:Notify("最终决战：破城巨兽。分散部队，避免城门密集受击。")
 end
 
@@ -272,14 +276,17 @@ function Sim:Target(u)
     local t = C.units[u.kind]
     local best = nil ---@type FrontierUnit?
     local bestScore = math.huge
+    local sight2 = t.sight * t.sight
     for _, v in ipairs(self.units) do
-        if self:Active(v) and v.team ~= u.team then
+        -- 先用平方距离剔除视野外的目标，避免每个单位都开一次 sqrt。
+        if v.active and v.hp > 0 and v.team ~= u.team
+            and (v.x - u.x)^2 + (v.y - u.y)^2 <= sight2 then
             local dx, dy = v.x - u.x, v.y - u.y
             local dist = math.sqrt(dx * dx + dy * dy)
-            local visible = dist <= t.sight
+            local visible = true
             -- 城墙实体阻断穿墙接战；在门外才允许攻守交互。
             if u.x < C.wallCol - 0.5 or v.x < C.wallCol - 0.5 then visible = false end
-            if u.team == "ally" and (self.command == "defend" or self.command == "wait" or u.returning) then
+            if u.team == "ally" and (self.command == "defend" or self.command == "wait") then
                 if v.x > C.wallCol + 4.2 and dist > t.range then visible = false end
             end
             if visible then
@@ -311,7 +318,7 @@ end
 
 -- passAllies：长时间僵持时的解结通道，允许穿过同阵营单位。
 -- 没有它，密集队形会卡在"恰好等于碰撞间距"的晶格上，谁也无法挪动半步。
-function Sim:PositionClear(u, x, y, relaxed, passAllies)
+function Sim:PositionClear(u, x, y, passAllies)
     local radius = self:CollisionRadius(u, x, y)
     local minX, maxX = math.floor(x - radius + 0.5), math.floor(x + radius + 0.5)
     local minY, maxY = math.floor(y - radius + 0.5), math.floor(y + radius + 0.5)
@@ -321,13 +328,11 @@ function Sim:PositionClear(u, x, y, relaxed, passAllies)
         end
     end
     for _, other in ipairs(self.units) do
-        if other ~= u and self:Active(other) then
+        if other ~= u and other.active and other.hp > 0 then
             local r = self:CollisionRadius(other, other.x, other.y)
             if math.abs(x - other.x) < radius + r and math.abs(y - other.y) < radius + r then
-                local friendly = other.team == u.team
-                if not (passAllies and friendly) then
-                    if not relaxed or friendly then return false end
-                end
+                -- 只有同阵营才允许解结穿越；敌方永远视为实心。
+                if not (passAllies and other.team == u.team) then return false end
             end
         end
     end
@@ -383,10 +388,9 @@ end
 
 -- 周围单位密度：越小越空旷。用于让拥堵单位朝人少的方向流动。
 function Sim:CrowdDensity(x, y, u, radius)
-    local count = 0
-    local r2 = radius * radius
+    local count, r2 = 0, radius * radius
     for _, v in ipairs(self.units) do
-        if v ~= u and self:Active(v) then
+        if v ~= u and v.active and v.hp > 0 then
             if (v.x - x)^2 + (v.y - y)^2 < r2 then count = count + 1 end
         end
     end
@@ -442,7 +446,7 @@ function Sim:Move(u, tx, ty, dt)
     local px, py = u.x + dx / dist * step, u.y + dy / dist * step
     -- 僵持过久就允许穿过同阵营单位，避免密集队形锁死在碰撞晶格上。
     local stuck = u.blocked > 2.5
-    if self:PositionClear(u, px, py) or (stuck and self:PositionClear(u, px, py, false, true)) then
+    if self:PositionClear(u, px, py) or (stuck and self:PositionClear(u, px, py, true)) then
         u.x, u.y, u.blocked, u.moving = px, py, 0, true
         if math.abs(dx) > 0.1 then u.facing = dx > 0 and 1 or -1 end
         -- 己方部队的踩踏把荒野逐渐压成道路；敌军不留下痕迹。
@@ -480,8 +484,7 @@ end
 
 function Sim:UpgradeUnit(u)
     if u.upgraded or u.team ~= "ally" then return end
-    -- 兵力已满时不再转职，否则一个单位会原地变成两个人。
-    if self:ArmyCount() >= C.armyLimit then return end
+    -- 转职是原地换兵种，不增加单位数量，因此不受兵力上限约束。
     for _, b in ipairs(self.grid.buildings) do
         local def = C.buildings[b.kind]
         if def.upgrade and b.stock > 0 then
@@ -546,7 +549,6 @@ end
 
 function Sim:ApplyCommand(u)
     if u.commandVersion == self.commandVersion then return end
-    u.returning = false
     u.commandVersion = self.commandVersion
     u.path, u.repath = {}, 0
 end
@@ -598,7 +600,7 @@ function Sim:Combat(u, target, dt)
         end
     elseif dist > reach then
         -- 待命与驻守不向远处追敌；重甲无论指令都不追击撤远目标。
-        if u.team == "ally" and (self.command == "defend" or self.command == "wait" or u.returning) then
+        if u.team == "ally" and (self.command == "defend" or self.command == "wait") then
             if target.x > C.wallCol + 4.2 then return end
         end
         if u.kind == "heavy" and dist > 2.6 then
@@ -706,6 +708,8 @@ function Sim:Step(dt)
     self.commandTimer = math.max(0, self.commandTimer - dt)
     self.noticeTime = math.max(0, self.noticeTime - dt)
     self.gold = self.gold + C.passiveIncome * dt
+    -- 兵力计数每帧统一刷新一次，之后生产/转职/胜负判定直接读缓存字段。
+    self:RefreshCounts()
     if self.phase == "develop" then
         self.phaseTime = math.max(0, self.phaseTime - dt)
         if self.phaseTime == 0 then self:StartWave(false) end
@@ -715,7 +719,6 @@ function Sim:Step(dt)
             local kind = self.waveQueue[1]
             if self:SpawnEnemy(kind) then
                 table.remove(self.waveQueue, 1)
-                if kind == "boss" then self.bossSeen = true end
                 self.spawnTimer = self.phase == "boss" and 1.3 or math.max(0.6, 1.5 - self.wave * 0.15)
             else
                 -- 右侧暂时没有空位：稍后再试，不要把敌人丢在重叠坐标上。
@@ -759,8 +762,13 @@ function Sim:Step(dt)
         if self.effects[i].life <= 0 then table.remove(self.effects, i) end
     end
     for i = #self.units, 1, -1 do
-        if self.units[i].hp <= 0 then table.remove(self.units, i) end
+        if self.units[i].hp <= 0 then
+            local last = self.units[#self.units]
+            self.units[i], self.units[#self.units] = last, self.units[i]
+            self.units[#self.units] = nil
+        end
     end
+    self:RefreshCounts()
     self.diagnosticTimer = self.diagnosticTimer + dt
     if self.diagnosticTimer >= 15 then
         self.diagnosticTimer = 0

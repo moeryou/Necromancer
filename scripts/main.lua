@@ -43,11 +43,14 @@ function HandleFrontierUpdate(eventType, eventData)
     if not sim.paused then
         accumulator = accumulator + dt * sim.speed
         local steps = 0
-        while accumulator >= C.fixedStep and steps < 15 do
+        -- 单帧最多补 30 步（1 秒游戏时间），3× 速度下也不会追不上而拖慢节奏。
+        while accumulator >= C.fixedStep and steps < 30 do
             sim:Step(C.fixedStep)
             accumulator = accumulator - C.fixedStep
             steps = steps + 1
         end
+        -- 追不上就丢弃积压，避免长时间卡顿后出现"补帧风暴"。
+        if accumulator > C.fixedStep * 30 then accumulator = 0 end
     else accumulator = 0 end
     hud:Update(dt)
 end

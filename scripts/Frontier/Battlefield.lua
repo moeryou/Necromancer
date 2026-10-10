@@ -8,8 +8,6 @@ local Art = require "Frontier.Artwork"
 ---@field tile number
 ---@field originX number
 ---@field originY number
----@field viewWidth number
----@field viewHeight number
 ---@field tool string
 ---@field hoverX number
 ---@field hoverY number
@@ -17,8 +15,10 @@ local Art = require "Frontier.Artwork"
 ---@field dragY number
 ---@field dragging boolean
 ---@field dragMoved boolean
----@field lastCell string
 local Battlefield = UI.Widget:Extend("FrontierBattlefield")
+
+-- 单位按 y 排序，制造前后遮挡；提到模块级，避免每帧重新分配比较闭包。
+local function ByDepth(a, b) return a.y < b.y end
 
 function Battlefield:Init(props)
     props = props or {}
@@ -27,16 +27,17 @@ function Battlefield:Init(props)
     UI.Widget.Init(self, props)
     self.sim = props.sim
     self.zoom, self.tile = 1, 36
-    self.originX, self.originY, self.viewWidth, self.viewHeight = 0, 0, 1, 1
+    self.originX, self.originY = 0, 0
     self.tool, self.hoverX, self.hoverY = "inspect", 0, 0
     self.dragX, self.dragY = 0, 0
-    self.dragging, self.dragMoved, self.lastCell = false, false, ""
+    self.dragging, self.dragMoved = false, false
+    self.drawOrder = {} ---@type FrontierUnit[]
+    self.groundBands, self.groundKey = nil, -1
 end
 
 -- 整张地图缩放到视口内：不再有横向卷动，一屏看完全场。
 function Battlefield:UpdateGeometry()
     local l = self:GetAbsoluteLayout()
-    self.viewWidth, self.viewHeight = l.w, l.h
     local marginX, marginY = 14, 22
     self.tile = math.max(4, math.min((l.w - marginX * 2) / C.cols, (l.h - marginY * 2) / C.rows)) * self.zoom
     self.originX = l.x + (l.w - C.cols * self.tile) * 0.5
@@ -64,7 +65,6 @@ function Battlefield:OnPointerDown(event)
     if not event:IsPrimaryButton() and event.pointerType ~= "touch" then return end
     self.dragging, self.dragMoved = true, false
     self.dragX, self.dragY = event.x, event.y
-    self.lastCell = ""
     self.hoverX, self.hoverY = self:WorldPoint(event.x,event.y)
     -- 地形不可编辑：点击只用于浏览和放置建筑。
     event:StopPropagation()
@@ -105,6 +105,37 @@ function Battlefield:OnPointerLeave(event)
     self.hoverX,self.hoverY = 0,0
 end
 
+-- 地面棋盘：4 种色块各归并成一条 path，一次填充。
+-- 棋盘只由 (列,行) 奇偶决定，与踩踏/建筑无关，因此仅随缩放重建。
+function Battlefield:DrawGround(vg, s, ox, oy, pal)
+    local key = math.floor(s * 10)
+    if self.groundKey ~= key or not self.groundBands then
+        local bands = {
+            { pal.grassIn, {} }, { pal.grassIn2, {} }, { pal.grassOut, {} }, { pal.grassOut2, {} },
+        }
+        for x = 1, C.cols do
+            for y = 1, C.rows do
+                local inside = x < C.wallCol
+                local even = (x + y) % 2 == 0
+                local band = inside and (even and bands[1] or bands[2]) or (even and bands[3] or bands[4])
+                local list = band[2]
+                list[#list + 1] = ox + (x - 1) * s
+                list[#list + 1] = oy + (y - 1) * s
+            end
+        end
+        self.groundBands, self.groundKey = bands, key
+    end
+    for _, band in ipairs(self.groundBands) do
+        local pts = band[2]
+        if #pts > 0 then
+            nvgBeginPath(vg)
+            for i = 1, #pts, 2 do nvgRect(vg, pts[i], pts[i + 1], s, s) end
+            nvgFillColor(vg, Art.Color(band[1]))
+            nvgFill(vg)
+        end
+    end
+end
+
 function Battlefield:Render(vg)
     self:UpdateGeometry()
     local l = self:GetAbsoluteLayout()
@@ -116,18 +147,21 @@ function Battlefield:Render(vg)
     local gradient = nvgLinearGradient(vg,0,l.y,0,l.y+l.h,nvgRGBA(128,180,90,255),nvgRGBA(96,146,68,255))
     nvgBeginPath(vg); nvgRect(vg,l.x,l.y,l.w,l.h); nvgFillPaint(vg,gradient); nvgFill(vg)
     local startCol, endCol = 1, C.cols
-    -- 地图边缘森林与散落植被，细节由坐标哈希决定而非每帧随机。
+    -- 地面按 (列,行,色块) 归并成少量 path：33×12 格从 396 次 fill 降到十几次，
+    -- 这是每帧最大的一笔开销。玩家规则不允许改地形，因此只在内容变化时重算。
+    self:DrawGround(vg,s,ox,oy,pal)
+    -- 地图边缘森林。画在草地之后，否则第 1 行的草地会盖住树干。
     for x=startCol,endCol do
         if x%3 == 0 then
             Art.Tree(vg,ox+(x-.5)*s,oy+s*.15,s*.78)
             Art.Tree(vg,ox+(x-.1)*s,oy+C.rows*s+s*.95,s*.82)
         end
+    end
+    -- 草丛、野花、踩踏路面与城墙等覆盖层。
+    for x=startCol,endCol do
         for y=1,C.rows do
             local px,py = ox+(x-1)*s,oy+(y-1)*s
             local cell = self.sim.grid.cells[y][x]
-            local base = x<C.wallCol and ((x+y)%2==0 and pal.grassIn or pal.grassIn2)
-                or ((x+y)%2==0 and pal.grassOut or pal.grassOut2)
-            Art.Rect(vg,px,py,s,s,base)
             local hash = (x*71+y*37)%23
             if hash<7 and cell.building==0 and cell.trail==0 then
                 local cx,cy=px+s*(.18+hash*.10),py+s*.72
@@ -158,18 +192,20 @@ function Battlefield:Render(vg)
     Art.Flag(vg,wx+s*.17,oy+(C.gateTop+C.gateWidth)*s,s*.8,{ 226,177,99,255 },self.sim.time+2)
     for _,b in ipairs(self.sim.grid.buildings) do
         local def=C.buildings[b.kind]
-        if b.x+def.w>=startCol and b.x<=endCol then
-            Art.Building(vg,b.kind,ox+(b.x-1)*s,oy+(b.y-1)*s,s,b.stock,
-                def.interval>0 and b.timer/def.interval or 0,self.sim.time)
-        end
+        Art.Building(vg,b.kind,ox+(b.x-1)*s,oy+(b.y-1)*s,s,b.stock,
+            def.interval>0 and b.timer/def.interval or 0,self.sim.time)
     end
-    local order = {}
-    for _,u in ipairs(self.sim.units) do if self.sim:Active(u) then table.insert(order,u) end end
-    table.sort(order,function(a,b) return a.y<b.y end)
-    for _,u in ipairs(order) do
-        if u.x>=startCol-1 and u.x<=endCol+1 then
-            Art.Unit(vg,u,ox+(u.x-.5)*s,oy+(u.y-.5)*s,s,self.sim.time)
-        end
+    -- 复用同一个绘制顺序表，避免每帧新建表；比较器提到模块级以免重复闭包分配。
+    local order = self.drawOrder
+    local n = 0
+    for _, u in ipairs(self.sim.units) do
+        if self.sim:Active(u) then n = n + 1; order[n] = u end
+    end
+    for i = n + 1, #order do order[i] = nil end
+    table.sort(order, ByDepth)
+    for i = 1, n do
+        local u = order[i]
+        Art.Unit(vg,u,ox+(u.x-.5)*s,oy+(u.y-.5)*s,s,self.sim.time)
     end
     for _,p in ipairs(self.sim.shots) do
         local target=self.sim:FindUnit(p.target)

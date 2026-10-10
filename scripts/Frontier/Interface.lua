@@ -51,6 +51,7 @@ function Interface:Init(sim)
     self.tool,self.timer="inspect",0
     self.narrow=graphics:GetWidth()/UI.GetScale()<1000
     self.helpOpen=false
+    self.widgets = {} ---@type table<string, any>
     self.battlefield=Battlefield { id="battlefield",sim=sim } --[[@as FrontierBattlefield]]
     self:Create()
 end
@@ -61,8 +62,18 @@ function Interface:Select(tool)
     self:Update(1)
 end
 
+-- 控件引用在首次取用时缓存：每 0.15 秒更新一次界面，没必要每次都遍历控件树。
+function Interface:Find(id)
+    local w = self.widgets[id]
+    if w == nil then
+        w = self.root:FindById(id) or false
+        self.widgets[id] = w
+    end
+    return w or nil
+end
+
 function Interface:Text(id,text)
-    local label=self.root:FindById(id) --[[@as Label?]]
+    local label=self:Find(id) --[[@as Label?]]
     if label then label:SetText(text) end
 end
 
@@ -140,7 +151,7 @@ function Interface:Create()
         children={
             UI.Panel { flexGrow=1,gap=4,children={
                 Label("01  /  发育阶段",15,P.gold,{ id="phase",fontWeight="bold" }),
-                Label("规划生产线，派遣部队采集城外资源",10,P.muted,{ id="phaseHint" }),
+                Label("规划生产线，用建筑占地引导部队走向",10,P.muted,{ id="phaseHint" }),
             } },
             Label("01:30",21,P.text,{ id="clock",fontWeight="bold",width=74,textAlign="right" }),
             Button("提前迎敌  →",function() sim:StartWave(true) end,{ id="waveButton",width=130,height=38,backgroundColor=P.gold,textColor=P.bg }),
@@ -201,7 +212,7 @@ function Interface:CreateHelp()
     local lines={
         { "01 / 规划营地", "战场空旷无物，也没有拆除与铺设工具。建筑一旦落下就不可撤销，你唯一能改变地形的手段，是用建筑占地去引导部队的走向。" },
         { "02 / 道路自己长出来", "部队从营地走到城门会反复踩踏同一条路线。走得越多，荒野依次变成踩踏痕迹、土路、硬化路面、加速通道，移速越来越快。道路完全自发形成，无法铺设也无法拆除。" },
-        { "03 / 兵力与产线", "我方同时存在的士兵上限为" .. C.armyLimit .. "。民兵营按周期产出民兵，盾牌工坊、弓箭作坊、马厩提供转职库存；产线越多，兵力补充越快。" },
+        { "03 / 兵力与产线", "我方同时存在的士兵上限为" .. C.armyLimit .. "。民兵营按周期产出民兵，盾牌工坊、弓箭作坊、马厩提供转职库存；转职是原地换兵种，不占额外编制。" },
         { "04 / 攻守取舍", "驻守城门不追击，但怕范围伤害；全力进攻主动前压，但后方空虚。每条指令消耗15资源，冷却8秒。" },
         { "05 / 道路与巨兽", "击退波次获得资源补给。大象必须有2格宽的硬化路面才能通行；路面不够宽，大象会卡滞并堵塞后队。" },
         { "06 / 最终决战", "击退3轮普通波次后直接迎战Boss。击败破城巨兽即可通关；城墙生命为0则失败。" },
@@ -239,7 +250,7 @@ end
 function Interface:Help(open)
     self.helpOpen=open
     self.sim.paused=open
-    local panel=self.root:FindById("help")
+    local panel=self:Find("help")
     if panel then panel:SetVisible(open) end
     self:Update(1)
 end
@@ -251,14 +262,14 @@ function Interface:Update(dt)
     local sim=self.sim
     self:Text("gold",tostring(math.floor(sim.gold)))
     self:Text("wall",math.ceil(sim.wallHp).." / "..C.wallHealth)
-    local hp=self.root:FindById("wallbar") --[[@as ProgressBar?]]
+    local hp=self:Find("wallbar") --[[@as ProgressBar?]]
     if hp then hp:SetValue(sim.wallHp/C.wallHealth) end
     local minutes=math.floor(sim.phaseTime/60)
     local seconds=math.floor(sim.phaseTime%60)
     self:Text("clock",sim.phase=="develop" and string.format("%02d:%02d",minutes,seconds) or "交战中")
     self:Text("phase",string.format("%02d",sim.wave).."  /  "..(sim.phase=="develop" and "发育阶段" or sim.phase=="boss" and "最终决战" or "波次进攻"))
-    self:Text("phaseHint",sim.phase=="develop" and "规划生产线，派遣部队采集城外资源" or sim.phase=="boss" and "破城巨兽优先攻击密集部队 · 保持分散" or ("消灭全部敌军 · 待刷新 "..#sim.waveQueue.." · 战场 "..sim:EnemyCount()))
-    local wb=self.root:FindById("waveButton") --[[@as Button?]]
+    self:Text("phaseHint",sim.phase=="develop" and "规划生产线，用建筑占地引导部队走向" or sim.phase=="boss" and "破城巨兽优先攻击密集部队 · 保持分散" or ("消灭全部敌军 · 待刷新 "..#sim.waveQueue.." · 战场 "..sim:EnemyCount()))
+    local wb=self:Find("waveButton") --[[@as Button?]]
     if wb then wb:SetDisabled(sim.phase~="develop"); wb:SetText(sim.phase=="develop" and ("迎敌 +"..math.floor(sim.phaseTime*.65).."  →") or "敌军来袭") end
     self:Text("counts","部队 "..sim:ArmyCount().." · 转职 "..sim.converted.." · 击败 "..sim.kills)
     local info=C.buildings[self.tool]
@@ -266,23 +277,23 @@ function Interface:Update(dt)
     local level=sim:RoadLevel()
     self:Text("roadLevel",C.trailNames[level+1].."  ·  "..math.floor(sim.roadProgress*100).."% 通行段达标")
     self:Text("commandHint",sim.commandTimer>0 and ("   /   冷却 "..math.ceil(sim.commandTimer).." 秒 · "..C.commandNames[sim.command]) or ("   /   15资源 · 当前："..C.commandNames[sim.command]))
-    self:Text("notice",sim.noticeTime>0 and sim.notice or (sim.blockedCount>0 and ("拥堵预警："..sim.blockedCount.."个单位受阻。拓宽主路、分散出口或调整工坊布局。") or "没有单兵微操：你能改的是营地布局、道路走向与全局指令。"))
+    self:Text("notice",sim.noticeTime>0 and sim.notice or (sim.blockedCount>0 and ("拥堵预警："..sim.blockedCount.."个单位受阻。分散出口或调整工坊布局。") or "没有单兵微操：你能改的是营地布局、道路走向与全局指令。"))
     for _,kind in ipairs({"defend","attack"}) do
-        local btn=self.root:FindById("command_"..kind) --[[@as Button?]]
+        local btn=self:Find("command_"..kind) --[[@as Button?]]
         if btn then
             btn:SetDisabled(sim.commandTimer>0 or sim.gold<C.commandCost or sim.phase=="victory" or sim.phase=="defeat")
             btn:SetStyle({borderColor=sim.command==kind and P.gold or P.line,backgroundColor=sim.command==kind and {73,78,56,255} or P.card})
         end
     end
     for _,kind in ipairs({"inspect","barracks","shield","bow","stable","elephant","tower","block"}) do
-        local btn=self.root:FindById("tool_"..kind) --[[@as Button?]]
+        local btn=self:Find("tool_"..kind) --[[@as Button?]]
         if btn then btn:SetStyle({borderColor=self.tool==kind and P.gold or P.line,backgroundColor=self.tool==kind and {75,81,58,255} or P.card}) end
     end
-    local pause=self.root:FindById("pause") --[[@as Button?]]
+    local pause=self:Find("pause") --[[@as Button?]]
     if pause then pause:SetText(sim.paused and "▶ 继续" or "Ⅱ 暂停") end
-    local speed=self.root:FindById("speed") --[[@as Button?]]
+    local speed=self:Find("speed") --[[@as Button?]]
     if speed then speed:SetText(sim.speed.."× 速度") end
-    local ending=self.root:FindById("end")
+    local ending=self:Find("end")
     if ending then ending:SetVisible(sim.phase=="victory" or sim.phase=="defeat") end
     self:Text("endTitle",sim.phase=="victory" and "边境守住了" or "城墙已失守")
     self:Text("endStats","击败 "..sim.kills.." · 转职 "..sim.converted.." · 产出 "..sim.produced)
