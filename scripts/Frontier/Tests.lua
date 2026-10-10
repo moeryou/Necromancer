@@ -180,10 +180,12 @@ function Start()
         local f1=sim:AddUnit("farmer","ally",8,3)
         local f2=sim:AddUnit("farmer","ally",8,4)
         local f3=sim:AddUnit("farmer","ally",8,5)
+        -- 采集位通过「预约交互格」实现：预约满 slots 个格子后不再有新目标。
         local r1,a1=sim:FindGatherTarget(f1); Check(r1~=nil,"第 1 名农民找到采集点")
-        if r1 then r1.reserved=r1.reserved+1 end
+        if a1 then sim:ReserveCell(a1.x,a1.y,f1.id) end
         local r2,a2=sim:FindGatherTarget(f2); Check(r2~=nil,"第 2 名农民找到采集点")
-        if r2 then r2.reserved=r2.reserved+1 end
+        if a2 then sim:ReserveCell(a2.x,a2.y,f2.id) end
+        Check(a1 and a2 and (a1.x~=a2.x or a1.y~=a2.y),"两名农民预约到不同的交互格（不扎堆）")
         local r3,a3=sim:FindGatherTarget(f3)
         Check(r3==nil,"采集位满员后第 3 名农民找不到采集点（不扎堆）")
         -- 森林采集位按剩余格数：3 格 → 1 位

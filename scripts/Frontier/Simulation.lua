@@ -61,6 +61,7 @@ local Grid = require "Frontier.Grid"
 ---@field carryKind? string
 ---@field gatherTimer number
 ---@field waitTimer number
+---@field leaveTimer number
 ---@field homeX number
 ---@field homeY number
 ---@field wanderAngle number
@@ -112,6 +113,7 @@ local Grid = require "Frontier.Grid"
 ---@field gateUsed number
 ---@field blockedCount number
 ---@field pathBlocked number
+---@field reserved table<number, number>
 ---@field diagnosticTimer number
 ---@field roadTimer number
 ---@field roadProgress number
@@ -147,6 +149,8 @@ function Sim:Init()
     self.notice = "民兵营与农民营已就绪。建仓库、让农民采集资源，再规划你的生产线。"
     self.noticeTime, self.gateUsed, self.blockedCount = 8, 0, 0
     self.pathBlocked = 0
+    -- 交互格独占表：cellKey -> 占用单位 id（见 FarmerGoal）。
+    self.reserved = {} ---@type table<number, number>
     self.diagnosticTimer = 0
     self.roadTimer, self.roadProgress, self.roadLevelValue = 0, 0, 0
     print("[游戏] 单机初始化：双产线（民兵/农民）+ 资源采集；被动 0.5/秒，初始 " .. C.startGold)
@@ -227,10 +231,12 @@ function Sim:AddUnit(kind, team, x, y)
         chargeBonus = 0, firstHit = 1, firstHitUsed = false, lastTarget = 0,
         cooldown = 0, path = {}, pathVersion = 0, goalX = -1, goalY = -1, repath = 0, blocked = 0,
         state = "行军", commandVersion = 0, passedGate = team ~= "ally", ticket = 0,
-        gateLane = 0, gateSlots = 0, facing = team == "ally" and 1 or -1,
+        gateLane = 0, gateSlots = 0,
+        facing = team == "ally" and 1 or -1,
         moving = false, flash = 0, active = true,
         worker = t.worker or false, task = "idle", carry = 0, carryKind = nil,
-        gatherTimer = 0, waitTimer = 0, homeX = x, homeY = y, wanderAngle = 0 } --[[@as FrontierUnit]]
+        gatherTimer = 0, waitTimer = 0, leaveTimer = 0,
+        homeX = x, homeY = y, wanderAngle = 0 } --[[@as FrontierUnit]]
     u.stats = BaseStats(kind)
     self.nextUnit = self.nextUnit + 1
     self.units[#self.units + 1] = u
@@ -246,6 +252,15 @@ end
 function Sim:FootCell(u)
     local offset = (u.size - 1) * 0.5
     return math.floor(u.x - offset + 0.5), math.floor(u.y - offset + 0.5)
+end
+
+-- 单位是否已站在指定格子上。
+-- 必须按格子索引比较：世界坐标与格子索引相差 0.5，用 |u.x - cell.x| < 0.4
+-- 会在 0.40 处临界失败，导致农民到了却永远触发不了采集/卸货。
+function Sim:AtCell(u, cell)
+    if not cell then return false end
+    local cx, cy = self:FootCell(u)
+    return cx == cell.x and cy == cell.y
 end
 
 ------------------------------------------------------------------
@@ -518,22 +533,27 @@ function Sim:PositionClear(u, x, y, passAllies)
     end
     for _, other in ipairs(self.units) do
         if other ~= u and other.active and other.hp > 0 then
-            local r = self:CollisionRadius(other, other.x, other.y)
-            if math.abs(x - other.x) < radius + r and math.abs(y - other.y) < radius + r then
-                if not (passAllies and other.team == u.team) then return false end
+            -- 农民之间互相穿行：采集单位不是战斗单位，挤在一起只会互相堵死，
+            -- 允许重叠对玩法毫无影响，却能根除采集路线的死锁。
+            -- 战斗单位之间仍严格实心，保持阵型与碰撞手感。
+            if not (u.worker and other.worker) then
+                local r = self:CollisionRadius(other, other.x, other.y)
+                if math.abs(x - other.x) < radius + r and math.abs(y - other.y) < radius + r then
+                    if not (passAllies and other.team == u.team) then return false end
+                end
             end
         end
     end
     return true
 end
 
--- 避让优先级（V3.2 §1.5）：农民 < 民兵 < 转职兵种 < 大象。数值越大越"重"，
--- 相向而行时轻单位主动侧移，重单位保持原路径。
+-- 避让优先级（V3.2 §1.5）：空手农民 < 负重农民 < 民兵 < 转职兵种 < 大象。
+-- 数值越大越"重"，相向而行时轻单位主动让位，重单位保持原路径。
 function Sim:AvoidRank(u)
-    if u.worker then return 1 end
-    if u.size == 2 then return 4 end
-    if next(u.gear) ~= nil then return 3 end
-    return 2
+    if u.worker then return u.carry > 0 and 2 or 1 end
+    if u.size == 2 then return 5 end
+    if next(u.gear) ~= nil then return 4 end
+    return 3
 end
 
 function Sim:GateStep()
@@ -660,6 +680,9 @@ function Sim:Move(u, tx, ty, dt)
     local speed = t.speed * C.trailSpeed[self.grid:TrailLevel(u.x, u.y) + 1]
     local step = math.min(dist, speed * dt)
     local px, py = u.x + dx / dist * step, u.y + dy / dist * step
+    -- 长时间僵持时允许穿过同阵营单位。这不是偷懒：单位间距一旦恰好等于
+    -- 最小碰撞距离，前进被挡、侧移又会让间距低于阈值，整列会锁死在碰撞晶格上。
+    -- 该通道只在 blocked 超过阈值后开启，平时仍是严格实心碰撞。
     local stuck = u.blocked > 2.5
     if self:PositionClear(u, px, py) or (stuck and self:PositionClear(u, px, py, true)) then
         u.x, u.y, u.blocked, u.moving = px, py, 0, true
@@ -676,10 +699,13 @@ function Sim:Move(u, tx, ty, dt)
     else
         u.blocked = u.blocked + dt
         u.state = "拥堵排队"
+        -- 被挡住时永远尝试挪动，而不是"原地等待"。
+        -- 让单位进入等待状态会造成永久僵死（谁都等谁）；只要每个单位都在尝试
+        -- 挪动 + 卡死时可穿过同阵营，拥堵就一定会自行解开。
         if u.blocked > 0.35 and u.gateSlots == 0 then
             local fx, fy = dx / dist, dy / dist
             local lx, ly = -fy, fx
-            -- 侧移方向偏向让路：轻单位优先向"人少"的一侧闪避（V3.2 §1.5）。
+            -- 候选顺序：先继续向前（前方刚空出就能跟上），再向两侧空旷处绕。
             local candidates = {
                 { fx, fy, 0 }, { fx * 0.7 + lx, fy * 0.7 + ly, 1 }, { fx * 0.7 - lx, fy * 0.7 - ly, 1 },
                 { lx, ly, 1 }, { -lx, -ly, 1 }, { fx * 0.4 + lx * 1.2, fy * 0.4 + ly * 1.2, 1 },
@@ -749,8 +775,46 @@ end
 -- 农民采集 AI（V3.2 §3）
 ------------------------------------------------------------------
 
--- 释放农民占用的采集位与目标。
+-- 交互格独占：同一格同时只允许一个单位作业。
+-- 没有这条规则时，多个农民会挤向资源点同一个相邻格，叠在一起互相卡死。
+function Sim:CellKey(x, y) return y * C.cols + x end
+
+function Sim:CellFree(x, y)
+    return self.reserved[self:CellKey(x, y)] == nil
+end
+
+-- 判断格子对某个单位是否可用：空闲，或本来就是它自己预约的。
+-- 少了这层判断，单位会把自己的预约当成"被别人占了"，永远等下去。
+function Sim:CellFreeFor(x, y, unitId)
+    local owner = self.reserved[self:CellKey(x, y)]
+    return owner == nil or owner == unitId
+end
+
+function Sim:ReserveCell(x, y, unitId)
+    self.reserved[self:CellKey(x, y)] = unitId
+end
+
+function Sim:ReleaseCell(u)
+    if u.targetCell then
+        local key = self:CellKey(u.targetCell.x, u.targetCell.y)
+        if self.reserved[key] == u.id then self.reserved[key] = nil end
+    end
+end
+
+-- 统计某资源点当前被预约的交互格数量（用于判断采集位是否占满）。
+function Sim:ReservedForResource(res)
+    local n = 0
+    for _, c in ipairs(res.cells) do
+        for _, adj in ipairs(self.grid:AdjacentWalkable(c.x, c.y)) do
+            if not self:CellFree(adj.x, adj.y) then n = n + 1 end
+        end
+    end
+    return n
+end
+
+-- 释放农民占用的采集位、交互格与目标。
 function Sim:ReleaseSlot(u)
+    self:ReleaseCell(u)
     if u.targetResource then
         local res = self.grid:FindResource(u.targetResource)
         if res and res.reserved > 0 then res.reserved = res.reserved - 1 end
@@ -758,18 +822,20 @@ function Sim:ReleaseSlot(u)
     u.targetResource, u.targetCell = nil, nil
 end
 
--- 找到可抵达、有空闲采集位、距离最近的资源点及其相邻采集格。
+-- 找到可抵达、采集位未满、距离最近的资源点，并预约一个空闲交互格。
+-- 关键：只能预约「未被其他单位占用」的格子，保证每个农民有独立作业位。
 function Sim:FindGatherTarget(u)
     local best, bestDist, bestCell = nil, math.huge, nil
     for _, res in ipairs(self.grid.resources) do
-        if res.stock > 0 and res.reserved < res.slots then
+        if res.stock > 0 and self:ReservedForResource(res) < res.slots then
             for _, c in ipairs(res.cells) do
                 for _, adj in ipairs(self.grid:AdjacentWalkable(c.x, c.y)) do
-                    local d = (adj.x - u.x)^2 + (adj.y - u.y)^2
-                    -- 已枯竭或路径不通的点直接跳过。
-                    if d < bestDist then
-                        local path = self.grid:Path(math.floor(u.x), math.floor(u.y), adj.x, adj.y, 1)
-                        if path then best, bestDist, bestCell = res, d, adj end
+                    if self:CellFree(adj.x, adj.y) then
+                        local d = (adj.x - u.x)^2 + (adj.y - u.y)^2
+                        if d < bestDist then
+                            local path = self.grid:Path(math.floor(u.x), math.floor(u.y), adj.x, adj.y, 1)
+                            if path then best, bestDist, bestCell = res, d, adj end
+                        end
                     end
                 end
             end
@@ -779,6 +845,8 @@ function Sim:FindGatherTarget(u)
 end
 
 -- 通行时间最短的仓库相邻格（V3.2 §3.3 运输阶段）。
+-- 刻意「不预约」仓库格：1×1 仓库只有 4 个相邻格，若被远处农民全程占住，
+-- 其余农民会永远拿不到位置而死锁。改为到点即卸、靠位置碰撞自然排队。
 function Sim:FindWarehouse(u)
     local bestCell, bestCost = nil, math.huge
     for _, b in ipairs(self.grid.buildings) do
@@ -816,6 +884,7 @@ function Sim:FarmerGoal(u, dt)
         if res and adj then
             res.reserved = res.reserved + 1
             u.targetResource, u.targetCell = res.id, adj
+            self:ReserveCell(adj.x, adj.y, u.id)
             u.task, u.path = "toResource", {}
         else
             u.task = "wait"
@@ -831,10 +900,15 @@ function Sim:FarmerGoal(u, dt)
             return
         end
         u.state = "前往资源点"
-        local d = math.abs(u.x - u.targetCell.x) + math.abs(u.y - u.targetCell.y)
-        if d < 0.4 then
+        if self:AtCell(u, u.targetCell) then
             u.task, u.gatherTimer = "gathering", C.resources[res.kind].gather
         else
+            -- 目标交互格被别人占了就先在附近等，不硬挤（交互格独占）。
+            if not self:CellFreeFor(u.targetCell.x, u.targetCell.y, u.id)
+                and not (math.abs(u.x - u.targetCell.x) < 0.6 and math.abs(u.y - u.targetCell.y) < 0.6) then
+                u.state, u.blocked = "等待作业位", u.blocked + dt
+                return
+            end
             self:Move(u, u.targetCell.x, u.targetCell.y, dt)
         end
         return
@@ -853,8 +927,9 @@ function Sim:FarmerGoal(u, dt)
             res.stock = res.stock - 1
             local def = C.resources[res.kind]
             u.carry, u.carryKind = def.value, res.kind
+            -- 作业完成即离：先走出交互格，再重新规划，避免堵在交互位。
             self:ReleaseSlot(u)
-            u.task, u.path = "toWarehouse", {}
+            u.task, u.path, u.leaveTimer = "leaving", {}, 0.4
             if res.stock <= 0 then
                 self.grid:RemoveResource(res)
                 self:Notify(def.name .. "资源点已枯竭，地块恢复为普通营地格")
@@ -863,7 +938,25 @@ function Sim:FarmerGoal(u, dt)
         return
     end
 
+    if u.task == "leaving" then
+        -- 离开交互格：朝营地内侧退开一格，期间不做任何寻路。
+        u.state = "离开作业位"
+        u.leaveTimer = u.leaveTimer - dt
+        self:Move(u, u.x - 1.6, u.y, dt)
+        if u.leaveTimer <= 0 then
+            u.path = {}
+            -- 背着资源就必须去仓库，否则会一直空跑采集、永远不入库。
+            if u.carry > 0 then
+                u.task, u.targetCell = "toWarehouse", nil
+            else
+                u.task, u.waitTimer = "wait", 0
+            end
+        end
+        return
+    end
+
     if u.task == "toWarehouse" then
+        -- 每帧重取最近的仓库相邻格：仓库不预约，谁先到谁卸货，其余自然排队。
         local adj = self:FindWarehouse(u)
         if not adj then
             -- 所有仓库均不可达：保留携带资源原地待命（V3.2 §5.3）。
@@ -873,14 +966,16 @@ function Sim:FarmerGoal(u, dt)
             return
         end
         u.state = "运送资源"
-        local d = math.abs(u.x - adj.x) + math.abs(u.y - adj.y)
-        if d < 0.4 then
+        if self:AtCell(u, adj) then
             self.gold = self.gold + u.carry
             self.harvested = self.harvested + u.carry
             self:Effect(u.x, u.y, "upgrade", { 240, 210, 130 }, 0.4)
             u.carry, u.carryKind = 0, nil
-            u.task, u.waitTimer = "wait", 0
+            -- 卸货同样遵守"作业完成即离"，先腾出卸货位。
+            self:ReleaseSlot(u)
+            u.task, u.path, u.leaveTimer = "leaving", {}, 0.4
         else
+            -- 仓库不预约：位置冲突交给碰撞与让位规则处理，走不到就自然排队。
             self:Move(u, adj.x, adj.y, dt)
         end
         return
