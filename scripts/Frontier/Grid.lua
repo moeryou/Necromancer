@@ -84,9 +84,17 @@ function Grid:TrailLevel(x, y)
 end
 
 -- 己方单位经过时累积踩踏，走得越多路面越好。
-function Grid:Trample(x, y, amount)
+-- 同一单位在 trampleCooldown 秒内重复经过同一格只计 1 次，避免原地抖动刷道路。
+---@param unitId number?
+---@param time number?
+function Grid:Trample(x, y, amount, unitId, time)
     local cell = self:Get(math.floor(x + 0.5), math.floor(y + 0.5))
     if not cell or cell.building ~= 0 then return end
+    if unitId and time and cell.lastUnit == unitId
+        and (time - (cell.lastTime or -math.huge)) < C.trampleCooldown then
+        return
+    end
+    cell.lastUnit, cell.lastTime = unitId, time
     local before = cell.trail
     cell.wear = cell.wear + (amount or 1)
     local level = 0
@@ -156,6 +164,34 @@ function Grid:FindBuilding(id)
     return nil
 end
 
+-- 返回与单位占地正交相邻、且带工序的所有建筑。
+-- 单位以左上角 (ux, uy) 表示、占地 size×size；只要单位的任一格与建筑任一格
+-- 四邻相接，即视为经过其加工面。多格建筑因此天然拥有多个并行工位：
+-- 2×2 正面 2 格、3×3 正面 3 格，谁贴着谁触发。
+---@param ux number 单位左上角列（已取整）
+---@param uy number 单位左上角行（已取整）
+---@param size number
+---@return FrontierBuilding[]
+function Grid:ProcessorsFor(ux, uy, size)
+    local result = {} ---@type FrontierBuilding[]
+    for _, b in ipairs(self.buildings) do
+        local def = C.buildings[b.kind]
+        if def.proc then
+            -- 两矩形四邻相接：列区间相邻且行区间有重叠，或行区间相邻且列区间有重叠。
+            local ux2, uy2 = ux + size - 1, uy + size - 1
+            local bx2, by2 = b.x + def.w - 1, b.y + def.h - 1
+            local colGap = math.max(b.x - ux2, ux - bx2)   -- 1 = 紧贴，>1 = 隔开
+            local rowGap = math.max(b.y - uy2, uy - by2)
+            local colOverlap = ux <= bx2 and b.x <= ux2
+            local rowOverlap = uy <= by2 and b.y <= uy2
+            if (colGap == 1 and rowOverlap) or (rowGap == 1 and colOverlap) then
+                result[#result + 1] = b
+            end
+        end
+    end
+    return result
+end
+
 -- 建筑一旦落下就不能拆除：营地规划是单向决策。
 -- 唯一的例外是「阻碍墙」的整条移除（供内部布局调整使用）。
 function Grid:RemoveBuilding(id)
@@ -211,6 +247,11 @@ function Grid:Path(sx, sy, tx, ty, size, strictLarge)
                 if self:Footprint(x, y, size) and (not strictLarge or self:LargeRoad(x, y)) then
                     local k = key(x, y)
                     local step = C.trailCost[self:TrailLevel(x, y) + 1]
+                    -- 分流随机：代价接近（≤ routeSplitRatio）的多条路径会因确定性抖动而
+                    -- 交替被选中，让"并行分流型"布局天然成立。抖动随地图版本变化，
+                    -- 因此布局或道路一改，分流模式随之刷新。
+                    local jitter = ((x * 37 + y * 19 + self.version * 13) % 11 - 5) * (C.routeSplitRatio / 5)
+                    step = step * (1 + jitter)
                     -- 营地内略向右偏置，返程与采集仍遵从实际目标方向。
                     if x < C.wallCol and tx > sx and d[1] < 0 then step = step + 0.35 end
                     if size == 2 and x < C.wallCol and not self:LargeRoad(x, y) then step = step + 2 end

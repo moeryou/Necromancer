@@ -106,7 +106,8 @@ function Interface:Create()
         },
     }
     local toolButtons={
-        Button("浏览",function() self:Select("inspect") end,{ id="tool_inspect",width="100%",height=34,fontSize=10 }),
+        Button("浏览",function() self:Select("inspect") end,{ id="tool_inspect",flexGrow=1,flexBasis=0,height=34,fontSize=10 }),
+        Button("拆除",function() self:Select("demolish") end,{ id="tool_demolish",flexGrow=1,flexBasis=0,height=34,fontSize=10 }),
     }
     local buildingButtons={}
     for _,kind in ipairs(C.buildOrder) do
@@ -120,7 +121,7 @@ function Interface:Create()
                         justifyContent="center",alignItems="center",children={ Label(def.short,16,def.color,{ fontWeight="bold" }) } },
                     UI.Panel { flexGrow=1,flexShrink=1,gap=3,children={
                         Label(def.name,12,P.text),
-                        Label(def.w.."×"..def.h.."  ·  "..(def.unit and "兵力生产" or def.upgrade and "库存转职" or "战线规划"),8,P.muted),
+                        Label(def.w.."×"..def.h.."  ·  "..(def.unit and "兵力生产" or def.proc and "接触加工" or "战线规划"),8,P.muted),
                     } },
                     Label(tostring(def.cost),12,P.gold,{ textAlign="right" }),
                 } },
@@ -210,9 +211,9 @@ end
 
 function Interface:CreateHelp()
     local lines={
-        { "01 / 规划营地", "战场空旷无物，也没有拆除与铺设工具。建筑一旦落下就不可撤销，你唯一能改变地形的手段，是用建筑占地去引导部队的走向。" },
-        { "02 / 道路自己长出来", "部队从营地走到城门会反复踩踏同一条路线。走得越多，荒野依次变成踩踏痕迹、土路、硬化路面、加速通道，移速越来越快。道路完全自发形成，无法铺设也无法拆除。" },
-        { "03 / 兵力与产线", "我方同时存在的士兵上限为" .. C.armyLimit .. "。民兵营按周期产出民兵，盾牌工坊、弓箭作坊、马厩提供转职库存；转职是原地换兵种，不占额外编制。" },
+        { "01 / 规划营地", "战场空旷无物，也没有铺路工具。建筑一旦落下便不可移动，拆除只返还 50% 资源；你改变地形的手段，是用建筑占地去引导部队的走向。" },
+        { "02 / 道路自己长出来", "部队从营地走到城门会反复踩踏同一条路线。走得越多，荒野依次变成踩踏痕迹、土路、硬化路面、加速通道，移速越来越快；站在硬化路面上的单位还能额外减伤。道路完全自发形成，无法铺设也无法拆除。" },
+        { "03 / 兵力与加工", "我方同时存在的士兵上限为" .. C.armyLimit .. "。民兵营按周期产出民兵，士兵路过工序建筑相邻格即自动加工：盾牌、锻炉提升生存，弓箭、瞄准台切换远程，马厩提升机动，号角强化首击。装备可叠加，但弓与盾互斥。" },
         { "04 / 攻守取舍", "驻守城门不追击，但怕范围伤害；全力进攻主动前压，但后方空虚。每条指令消耗15资源，冷却8秒。" },
         { "05 / 道路与巨兽", "击退波次获得资源补给。大象必须有2格宽的硬化路面才能通行；路面不够宽，大象会卡滞并堵塞后队。" },
         { "06 / 最终决战", "击退3轮普通波次后直接迎战Boss。击败破城巨兽即可通关；城墙生命为0则失败。" },
@@ -271,9 +272,13 @@ function Interface:Update(dt)
     self:Text("phaseHint",sim.phase=="develop" and "规划生产线，用建筑占地引导部队走向" or sim.phase=="boss" and "破城巨兽优先攻击密集部队 · 保持分散" or ("消灭全部敌军 · 待刷新 "..#sim.waveQueue.." · 战场 "..sim:EnemyCount()))
     local wb=self:Find("waveButton") --[[@as Button?]]
     if wb then wb:SetDisabled(sim.phase~="develop"); wb:SetText(sim.phase=="develop" and ("迎敌 +"..math.floor(sim.phaseTime*.65).."  →") or "敌军来袭") end
-    self:Text("counts","部队 "..sim:ArmyCount().." · 转职 "..sim.converted.." · 击败 "..sim.kills)
+    self:Text("counts","部队 "..sim:ArmyCount().." · 加工 "..sim.converted.." · 击败 "..sim.kills)
     local info=C.buildings[self.tool]
-    self:Text("mapStatus",info and (info.name.." · "..info.description) or ("一屏看完全场 · 城门占用 "..sim.gateUsed.."/3"))
+    if self.tool=="demolish" then
+        self:Text("mapStatus","拆除模式 · 点击建筑返还 50% 资源")
+    else
+        self:Text("mapStatus",info and (info.name.." · "..info.description) or ("一屏看完全场 · 城门占用 "..sim.gateUsed.."/3"))
+    end
     local level=sim:RoadLevel()
     self:Text("roadLevel",C.trailNames[level+1].."  ·  "..math.floor(sim.roadProgress*100).."% 通行段达标")
     self:Text("commandHint",sim.commandTimer>0 and ("   /   冷却 "..math.ceil(sim.commandTimer).." 秒 · "..C.commandNames[sim.command]) or ("   /   15资源 · 当前："..C.commandNames[sim.command]))
@@ -285,7 +290,7 @@ function Interface:Update(dt)
             btn:SetStyle({borderColor=sim.command==kind and P.gold or P.line,backgroundColor=sim.command==kind and {73,78,56,255} or P.card})
         end
     end
-    for _,kind in ipairs({"inspect","barracks","shield","bow","stable","elephant","tower","block"}) do
+    for _,kind in ipairs({"inspect","demolish","barracks","elephant","shield","bow","forge","aim","stable","horn","tower","block"}) do
         local btn=self:Find("tool_"..kind) --[[@as Button?]]
         if btn then btn:SetStyle({borderColor=self.tool==kind and P.gold or P.line,backgroundColor=self.tool==kind and {75,81,58,255} or P.card}) end
     end

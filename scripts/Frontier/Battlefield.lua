@@ -81,7 +81,10 @@ end
 function Battlefield:OnPointerUp(event)
     if self.dragging and not self.dragMoved then
         local x,y = self:WorldPoint(event.x,event.y)
-        if C.buildings[self.tool] then
+        if self.tool == "demolish" then
+            -- 拆除模式：点击建筑返还 50% 资源。
+            self.sim:Demolish(x,y)
+        elseif C.buildings[self.tool] then
             self.sim:Perform(self.tool,x,y)
         else
             local cell = self.sim.grid:Get(x,y)
@@ -89,7 +92,7 @@ function Battlefield:OnPointerUp(event)
                 local b = self.sim.grid:FindBuilding(cell.building)
                 if b then
                     local def = C.buildings[b.kind]
-                    self.sim:Notify(def.name .. " · " .. def.description .. (def.upgrade and (" · 库存 " .. b.stock .. "/5") or ""))
+                    self.sim:Notify(def.name .. " · " .. def.description .. (def.processed and (" · 已加工 " .. b.processed .. " 次") or ""))
                 end
             end
         end
@@ -136,6 +139,66 @@ function Battlefield:DrawGround(vg, s, ox, oy, pal)
     end
 end
 
+-- 预测路线（虚线）与实际行进路线（实线）。实际路线优先，只在还没有士兵
+-- 真正走过时显示预测，避免两条线互相干扰。
+function Battlefield:DrawRoute(vg, s, ox, oy)
+    local sim = self.sim
+    local function center(p) return ox + (p.x - 0.5) * s, oy + (p.y - 0.5) * s end
+    local actual = sim.actualRoute
+    if #actual >= 2 then
+        nvgBeginPath(vg)
+        local x0, y0 = center(actual[1])
+        nvgMoveTo(vg, x0, y0)
+        for i = 2, #actual do
+            local x, y = center(actual[i])
+            nvgLineTo(vg, x, y)
+        end
+        nvgStrokeColor(vg, nvgRGBA(250, 228, 150, 235))
+        nvgStrokeWidth(vg, math.max(1.5, s * 0.10))
+        nvgLineJoin(vg, NVG_ROUND); nvgLineCap(vg, NVG_ROUND)
+        nvgStroke(vg)
+    else
+        local path = sim:PreviewRoute()
+        if path and #path >= 2 then
+            -- 手绘虚线：逐段按比例留空，避免依赖未暴露的 nvgDash。
+            local dash, gap = s * 0.24, s * 0.20
+            nvgBeginPath(vg)
+            for i = 2, #path do
+                local ax, ay = center(path[i - 1])
+                local bx, by = center(path[i])
+                local dx, dy = bx - ax, by - ay
+                local len = math.sqrt(dx * dx + dy * dy)
+                if len > 0 then
+                    local ux, uy = dx / len, dy / len
+                    local t = 0
+                    while t < len do
+                        local e = math.min(t + dash, len)
+                        nvgMoveTo(vg, ax + ux * t, ay + uy * t)
+                        nvgLineTo(vg, ax + ux * e, ay + uy * e)
+                        t = t + dash + gap
+                    end
+                end
+            end
+            nvgStrokeColor(vg, nvgRGBA(255, 244, 190, 170))
+            nvgStrokeWidth(vg, math.max(1, s * 0.08))
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+        end
+    end
+    -- 路径阻断提示：在被堵死的产兵建筑上方画红色警示。
+    for _, b in ipairs(sim.grid.buildings) do
+        local def = C.buildings[b.kind]
+        if def.unit and sim.pathBlocked > 0 then
+            local spots = sim.grid:SpawnSpot(b, C.units[def.unit].size)
+            if #spots == 0 then
+                local cx, cy = ox + (b.x + def.w * 0.5 - 0.5) * s, oy + (b.y - 0.6) * s
+                Art.Circle(vg, cx, cy, s * 0.32, { 224, 92, 78, 235 }, Art.palette.outline, 1.5)
+                Art.Line(vg, cx - s * .14, cy, cx + s * .14, cy, { 255, 240, 230, 255 }, 2)
+            end
+        end
+    end
+end
+
 function Battlefield:Render(vg)
     self:UpdateGeometry()
     local l = self:GetAbsoluteLayout()
@@ -172,6 +235,8 @@ function Battlefield:Render(vg)
             elseif x==C.wallCol and not self.sim.grid:IsGateRow(y) then Art.Wall(vg,px,py,s) end
         end
     end
+    -- 路线反馈：先画预测虚线（摆放建筑时），再画实际轨迹实线。
+    self:DrawRoute(vg,s,ox,oy)
     -- 营地边界、城门条纹与行军方向刻线。
     local wx = ox+(C.wallCol-1)*s
     Art.Line(vg,ox-2,oy,ox-2,oy+C.rows*s,{ 150,196,124,150 },2)
@@ -192,8 +257,8 @@ function Battlefield:Render(vg)
     Art.Flag(vg,wx+s*.17,oy+(C.gateTop+C.gateWidth)*s,s*.8,{ 226,177,99,255 },self.sim.time+2)
     for _,b in ipairs(self.sim.grid.buildings) do
         local def=C.buildings[b.kind]
-        Art.Building(vg,b.kind,ox+(b.x-1)*s,oy+(b.y-1)*s,s,b.stock,
-            def.interval>0 and b.timer/def.interval or 0,self.sim.time)
+        local progress = def.unit and def.interval>0 and b.timer/def.interval or 0
+        Art.Building(vg,b.kind,ox+(b.x-1)*s,oy+(b.y-1)*s,s,b.processed,progress,self.sim.time)
     end
     -- 复用同一个绘制顺序表，避免每帧新建表；比较器提到模块级以免重复闭包分配。
     local order = self.drawOrder
@@ -222,16 +287,31 @@ function Battlefield:Render(vg)
         nvgStrokeColor(vg,Art.Color(e.color,alpha)); nvgStrokeWidth(vg,1.5); nvgStroke(vg)
         if e.kind=="aoe" then Art.Circle(vg,x,y,radius,{ e.color[1],e.color[2],e.color[3],math.floor(alpha*.2) }) end
     end
-    if C.buildings[self.tool] and self.hoverX>0 and self.hoverY>0 then
-        local def=C.buildings[self.tool]
-        local w,h=def.w,def.h
-        local valid=self.sim.grid:CanPlace(self.tool,self.hoverX,self.hoverY)
-        local col=valid and { 229,218,163,90 } or { 225,117,95,120 }
-        local x,y=ox+(self.hoverX-1)*s,oy+(self.hoverY-1)*s
-        Art.Rect(vg,x,y,w*s,h*s,col,2)
-        nvgBeginPath(vg); nvgRect(vg,x+1,y+1,w*s-2,h*s-2)
-        nvgStrokeColor(vg,valid and nvgRGBA(243,223,160,255) or nvgRGBA(244,138,112,255))
-        nvgStrokeWidth(vg,2); nvgStroke(vg)
+    if self.hoverX>0 and self.hoverY>0 then
+        if self.tool == "demolish" then
+            -- 拆除模式：高亮悬停的建筑（仅当该格确有建筑）。
+            local cell = self.sim.grid:Get(self.hoverX,self.hoverY)
+            if cell and cell.building > 0 then
+                local b = self.sim.grid:FindBuilding(cell.building)
+                if b then
+                    local bd = C.buildings[b.kind]
+                    local x,y=ox+(b.x-1)*s,oy+(b.y-1)*s
+                    Art.Rect(vg,x,y,bd.w*s,bd.h*s,{ 225,117,95,110 },2)
+                    nvgBeginPath(vg); nvgRect(vg,x+1,y+1,bd.w*s-2,bd.h*s-2)
+                    nvgStrokeColor(vg,nvgRGBA(244,138,112,255)); nvgStrokeWidth(vg,2); nvgStroke(vg)
+                end
+            end
+        elseif C.buildings[self.tool] then
+            local def=C.buildings[self.tool]
+            local w,h=def.w,def.h
+            local valid=self.sim.grid:CanPlace(self.tool,self.hoverX,self.hoverY)
+            local col=valid and { 229,218,163,90 } or { 225,117,95,120 }
+            local x,y=ox+(self.hoverX-1)*s,oy+(self.hoverY-1)*s
+            Art.Rect(vg,x,y,w*s,h*s,col,2)
+            nvgBeginPath(vg); nvgRect(vg,x+1,y+1,w*s-2,h*s-2)
+            nvgStrokeColor(vg,valid and nvgRGBA(243,223,160,255) or nvgRGBA(244,138,112,255))
+            nvgStrokeWidth(vg,2); nvgStroke(vg)
+        end
     end
     nvgRestore(vg)
 end

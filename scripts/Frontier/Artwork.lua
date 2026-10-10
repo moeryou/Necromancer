@@ -328,6 +328,36 @@ function Art.Building(vg, kind, x, y, s, stock, progress, time)
         emblem = function(g, cx, cy, r)
             Art.Circle(g, cx, cy, r * .8, { 224, 208, 244, 255 }, p.outline, r * .18)
         end
+    elseif kind == "forge" then
+        roof, roofDark = p.roofRed, p.roofRedD
+        -- 铁砧 + 炉火
+        emblem = function(g, cx, cy, r)
+            Art.Polygon(g, { cx - r * .9, cy + r * .5, cx + r * .9, cy + r * .5,
+                cx + r * .55, cy - r * .1, cx - r * .55, cy - r * .1 }, { 96, 104, 116, 255 }, p.outline, r * .16)
+            Art.Polygon(g, { cx - r * .18, cy - r * .35, cx + r * .18, cy - r * .35, cx, cy - r * .95 },
+                { 246, 196, 96, 255 }, p.outline, r * .14)
+        end
+    elseif kind == "aim" then
+        roof, roofDark = p.roofGreen, p.roofGreenD
+        -- 准星
+        emblem = function(g, cx, cy, r)
+            nvgBeginPath(g); nvgCircle(g, cx, cy, r * .7)
+            stroke(g, { 240, 236, 200, 255 }, r * .16)
+            Art.Line(g, cx - r, cy, cx - r * .35, cy, { 240, 236, 200, 255 }, r * .16)
+            Art.Line(g, cx + r * .35, cy, cx + r, cy, { 240, 236, 200, 255 }, r * .16)
+            Art.Line(g, cx, cy - r, cx, cy - r * .35, { 240, 236, 200, 255 }, r * .16)
+            Art.Line(g, cx, cy + r * .35, cx, cy + r, { 240, 236, 200, 255 }, r * .16)
+        end
+    elseif kind == "horn" then
+        roof, roofDark = p.roofOrange, p.roofOrangeD
+        -- 号角
+        emblem = function(g, cx, cy, r)
+            nvgBeginPath(g)
+            nvgMoveTo(g, cx - r * .8, cy + r * .5)
+            nvgQuadTo(g, cx + r * .3, cy + r * .5, cx + r * .8, cy - r * .7)
+            stroke(g, { 248, 226, 156, 255 }, r * .34)
+            Art.Circle(g, cx - r * .8, cy + r * .5, r * .3, { 248, 226, 156, 255 }, p.outline, r * .14)
+        end
     end
 
     house(vg, x, y, w, h, roof, roofDark, { emblem = emblem })
@@ -349,8 +379,14 @@ local function helm(vg, z, yTop, color, dark)
 end
 
 -- Q版士兵：圆头盔 + 厚轮廓 + 武器。facing 决定朝向（-1 左 / 1 右）。
+-- 外观直接由 u.gear 驱动：盾牌、重甲、弓箭、瞄准配件、号角都能一眼认出。
 local function soldier(vg, u, z, t, p)
-    local color = u.flash > 0 and { 255, 246, 224, 255 } or t.color
+    local color = u.flash > 0 and { 255, 246, 224, 255 } or C.units[u.kind].color
+    -- 重甲：身体颜色加深，体型略微放大。
+    if u.gear.forge then
+        color = u.flash > 0 and color or { math.floor(color[1] * .68), math.floor(color[2] * .70), math.floor(color[3] * .74) }
+        z = z * 1.06
+    end
     local f = u.facing
     -- 腿
     Art.Rect(vg, -z * .28, z * .18, z * .21, z * .40, p.boot, z * .08, p.outline, z * .07)
@@ -367,6 +403,8 @@ local function soldier(vg, u, z, t, p)
         nvgQuadTo(vg, z * 1.08 * f, -z * .02, z * .50 * f, z * .40)
         stroke(vg, { 214, 176, 108, 255 }, z * .11)
         Art.Line(vg, z * .50 * f, -z * .40, z * .50 * f, z * .40, { 240, 232, 190, 220 }, z * .06)
+        -- 瞄准配件：弓身加装金色瞄具
+        if u.gear.aim then Art.Circle(vg, z * .78 * f, 0, z * .07, { 246, 214, 120, 255 }, p.outline, z * .03) end
     else
         Art.Line(vg, z * .46 * f, z * .32, z * 1.02 * f, -z * .54, { 226, 232, 240, 255 }, z * .15)
         Art.Line(vg, z * .38 * f, z * .12, z * .70 * f, z * .28, { 240, 214, 130, 255 }, z * .13)
@@ -375,19 +413,26 @@ local function soldier(vg, u, z, t, p)
     Art.Circle(vg, 0, -z * .48, z * .30, p.skin, p.outline, z * .085)
     Art.Circle(vg, -z * .12, -z * .30, z * .05, { 62, 48, 42, 255 })
     Art.Circle(vg, z * .12, -z * .30, z * .05, { 62, 48, 42, 255 })
-    helm(vg, z, -z * .62, p.metal, p.metalDark)
-    -- 重甲/盾兵额外举盾
-    if u.kind == "heavy" or u.kind == "brute" then
+    helm(vg, z, -z * .62, u.gear.forge and { 132, 138, 150, 255 } or p.metal, p.metalDark)
+    -- 盾牌：单手举盾
+    if u.gear.shield then
         Art.Polygon(vg, {
             z * .28 * f, -z * .30, z * .88 * f, -z * .30,
             z * .88 * f, z * .26, z * .58 * f, z * .50, z * .28 * f, z * .26,
         }, { 196, 212, 220, 255 }, p.outline, z * .08)
     end
+    -- 号角：背部小型黄色标识
+    if u.gear.horn then
+        Art.Circle(vg, -z * .34 * f, -z * .16, z * .10, { 246, 208, 96, 255 }, p.outline, z * .035)
+    end
 end
 
--- 骑兵：马 + 骑手。
+-- 骑兵：马 + 骑手。任何装备了坐骑（马厩加工）的单位都切换到该姿态。
 local function cavalry(vg, u, z, t, p)
-    local color = u.flash > 0 and { 255, 246, 224, 255 } or t.color
+    local color = u.flash > 0 and { 255, 246, 224, 255 } or C.units[u.kind].color
+    if u.gear.forge then
+        color = u.flash > 0 and color or { math.floor(color[1] * .68), math.floor(color[2] * .70), math.floor(color[3] * .74) }
+    end
     local f = u.facing
     -- 马身
     Art.Ellipse(vg, 0, z * .18, z * .92, z * .44, { 150, 118, 80, 255 }, p.outline, z * .10)
@@ -441,7 +486,7 @@ function Art.Unit(vg, u, x, y, s, time)
     local bob = u.moving and math.sin(time * 12 + u.id) * z * .08 or 0
     nvgTranslate(vg, 0, bob)
     if u.size == 2 then beast(vg, u, z, t, p)
-    elseif u.kind == "cavalry" then cavalry(vg, u, z, t, p)
+    elseif u.gear.stable then cavalry(vg, u, z, t, p)
     else soldier(vg, u, z, t, p) end
     nvgRestore(vg)
     if u.hp < u.maxHp then
