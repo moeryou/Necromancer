@@ -118,31 +118,29 @@ function Battlefield:Render(vg)
     local s,ox,oy = self.tile,self.originX,self.originY
     nvgSave(vg)
     nvgIntersectScissor(vg,l.x,l.y,l.w,l.h)
-    Art.Rect(vg,l.x,l.y,l.w,l.h,{ 70, 87, 63, 255 })
-    local gradient = nvgLinearGradient(vg,0,l.y,0,l.y+l.h,nvgRGBA(94,110,78,255),nvgRGBA(56,76,58,255))
+    local pal = Art.palette
+    Art.Rect(vg,l.x,l.y,l.w,l.h,pal.grassOut)
+    local gradient = nvgLinearGradient(vg,0,l.y,0,l.y+l.h,nvgRGBA(128,180,90,255),nvgRGBA(96,146,68,255))
     nvgBeginPath(vg); nvgRect(vg,l.x,l.y,l.w,l.h); nvgFillPaint(vg,gradient); nvgFill(vg)
     local startCol = math.max(1,math.floor(self.cameraX))
     local endCol = math.min(C.cols,math.ceil(self.cameraX+l.w/s)+1)
     -- 地图边缘森林与散落植被，细节由坐标哈希决定而非每帧随机。
     for x=startCol,endCol do
         if x%3 == 0 then
-            Art.Tree(vg,ox+(x-.5)*s,oy-7,s*.32)
-            Art.Tree(vg,ox+(x-.1)*s,oy+C.rows*s+s*.55,s*.35)
+            Art.Tree(vg,ox+(x-.5)*s,oy+s*.15,s*.78)
+            Art.Tree(vg,ox+(x-.1)*s,oy+C.rows*s+s*.95,s*.82)
         end
         for y=1,C.rows do
             local px,py = ox+(x-1)*s,oy+(y-1)*s
             local cell = self.sim.grid.cells[y][x]
-            local base = x<C.wallCol and ((x+y)%2==0 and { 121,132,94,255 } or { 115,128,90,255 })
-                or ((x+y)%2==0 and { 99,116,81,255 } or { 96,113,79,255 })
+            local base = x<C.wallCol and ((x+y)%2==0 and pal.grassIn or pal.grassIn2)
+                or ((x+y)%2==0 and pal.grassOut or pal.grassOut2)
             Art.Rect(vg,px,py,s,s,base)
-            if x<C.wallCol then
-                Art.Rect(vg,px,py,s-1,s-1,{ base[1]+2,base[2]+2,base[3]+2,255 })
-            end
             local hash = (x*71+y*37)%23
-            if hash<5 and cell.building==0 and cell.trail==0 then
-                local cx,cy=px+s*.2+hash*s*.11,py+s*.65
-                Art.Line(vg,cx,cy,cx-2,cy-3,{ 76,100,65,110 },1)
-                Art.Line(vg,cx,cy,cx+2,cy-5,{ 79,105,67,110 },1)
+            if hash<7 and cell.building==0 and cell.trail==0 then
+                local cx,cy=px+s*(.18+hash*.10),py+s*.72
+                Art.GrassTuft(vg,cx,cy,s*.34)
+                if hash<2 then Art.Flower(vg,cx+s*.30,cy-s*.06,s*.30,{ 246,244,236,255 }) end
             end
             if cell.trail > 0 then Art.Trail(vg,px,py,s,cell.trail,x*13+y*7)
             elseif x==C.wallCol and not self.sim.grid:IsGateRow(y) then Art.Wall(vg,px,py,s) end
@@ -150,10 +148,19 @@ function Battlefield:Render(vg)
     end
     -- 营地边界、城门条纹与行军方向刻线。
     local wx = ox+(C.wallCol-1)*s
-    Art.Line(vg,ox-2,oy,ox-2,oy+C.rows*s,{ 171,169,126,180 },2)
+    Art.Line(vg,ox-2,oy,ox-2,oy+C.rows*s,{ 150,196,124,150 },2)
     for y=C.gateTop,C.gateTop+C.gateWidth-1 do
-        Art.Line(vg,wx+s*.12,oy+(y-.5)*s,wx+s*.8,oy+(y-.5)*s,{ 224,205,139,170 },1.5)
-        Art.Polygon(vg,{ wx+s*.7,oy+(y-.66)*s,wx+s*.9,oy+(y-.5)*s,wx+s*.7,oy+(y-.34)*s },{ 224,205,139,170 })
+        -- 门道：木板铺面 + 向右的通行箭头
+        local gy = oy+(y-1)*s
+        Art.Rect(vg,wx+s*.06,gy+s*.05,s*.88,s*.9,pal.woodLite,s*.08,pal.outline,s*.05)
+        nvgBeginPath(vg)
+        for i=1,2 do
+            local yy=gy+s*(.05+i*.30)
+            nvgMoveTo(vg,wx+s*.06,yy); nvgLineTo(vg,wx+s*.94,yy)
+        end
+        Art.Stroke(vg,pal.woodDark,s*.05)
+        Art.Polygon(vg,{ wx+s*.30,oy+(y-.68)*s,wx+s*.78,oy+(y-.5)*s,wx+s*.30,oy+(y-.32)*s },
+            { 250,226,158,235 },pal.outline,s*.05)
     end
     Art.Flag(vg,wx+s*.17,oy+(C.gateTop-1.1)*s,s*.8,{ 226,177,99,255 },self.sim.time)
     Art.Flag(vg,wx+s*.17,oy+(C.gateTop+C.gateWidth)*s,s*.8,{ 226,177,99,255 },self.sim.time+2)
@@ -214,9 +221,9 @@ function Battlefield:Render(vg)
     -- 底部缩略全图。点击导航由独立UI按钮负责，这里仅提供视觉信息。
     local mw=math.min(280,l.w*.35)
     local mx,my=l.x+l.w-mw-20,l.y+l.h-26
-    Art.Rect(vg,mx-6,my-6,mw+12,18,{ 40,53,42,210 },3)
-    Art.Rect(vg,mx,my,mw*C.wallCol/C.cols,6,{ 147,153,109,255 },1)
-    Art.Rect(vg,mx+mw*C.wallCol/C.cols,my,mw*(C.cols-C.wallCol)/C.cols,6,{ 84,111,75,255 },1)
+    Art.Rect(vg,mx-6,my-6,mw+12,18,{ 44,56,42,215 },3,pal.outline,1.2)
+    Art.Rect(vg,mx,my,mw*C.wallCol/C.cols,6,pal.grassIn,1)
+    Art.Rect(vg,mx+mw*C.wallCol/C.cols,my,mw*(C.cols-C.wallCol)/C.cols,6,pal.grassOut,1)
     for _,u in ipairs(self.sim.units) do
         if self.sim:Active(u) then Art.Circle(vg,mx+mw*u.x/C.cols,my+3,1.3,u.team=="ally" and { 216,210,145,255 } or { 221,113,90,255 }) end
     end

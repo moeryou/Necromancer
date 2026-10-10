@@ -1,224 +1,476 @@
--- 战场矢量美术仅绘制地图与实体，文字、按钮和HUD由UI组件负责。
+-- 战场卡通美术：厚轮廓 + 暖色高饱和 + Q版造型，全部由 NanoVG 矢量绘制。
+-- 本模块只画地图与实体；文字、按钮和 HUD 由 UI 组件负责。
 local C = require "Frontier.Config"
 local Art = {}
-Art.colors = {
-    ink = { 38, 45, 40, 255 }, paper = { 232, 228, 208, 255 },
-    gold = { 209, 180, 117, 255 }, olive = { 110, 128, 95, 255 },
-    ground = { 96, 111, 79, 255 }, groundAlt = { 101, 115, 83, 255 },
-    dark = { 48, 59, 46, 255 }, road = { 170, 156, 117, 255 },
+
+-- 统一调色板。参考图是暖色卡通，轮廓用深棕而非纯黑，避免生硬。
+Art.palette = {
+    outline   = { 58, 44, 36, 255 },
+    shadow    = { 40, 52, 36, 90 },
+    -- 草地：内侧营地更亮，外侧荒野偏深；棋盘格对比压得很低，避免"方格布"感
+    grassIn   = { 128, 180, 86, 255 },
+    grassIn2  = { 125, 176, 83, 255 },
+    grassOut  = { 112, 163, 76, 255 },
+    grassOut2 = { 108, 158, 72, 255 },
+    -- 土路
+    road      = { 204, 174, 120, 255 },
+    roadDark  = { 176, 146, 96, 255 },
+    roadLight = { 222, 196, 148, 255 },
+    -- 石材
+    stone     = { 178, 184, 194, 255 },
+    stoneDark = { 140, 148, 162, 255 },
+    stoneLite = { 216, 222, 230, 255 },
+    -- 木料
+    wood      = { 178, 134, 86, 255 },
+    woodDark  = { 138, 100, 62, 255 },
+    woodLite  = { 208, 168, 116, 255 },
+    -- 屋顶
+    roofRed    = { 198, 76, 60, 255 },
+    roofRedD   = { 158, 56, 46, 255 },
+    roofBlue   = { 76, 126, 180, 255 },
+    roofBlueD  = { 56, 98, 148, 255 },
+    roofGreen  = { 108, 156, 88, 255 },
+    roofGreenD = { 82, 126, 68, 255 },
+    roofOrange = { 218, 134, 70, 255 },
+    roofOrangeD= { 178, 102, 52, 255 },
+    roofPurple = { 150, 128, 190, 255 },
+    roofPurpleD= { 116, 96, 156, 255 },
+    -- 其他
+    gold      = { 238, 194, 100, 255 },
+    skin      = { 238, 206, 162, 255 },
+    metal     = { 176, 184, 196, 255 },
+    metalDark = { 138, 148, 162, 255 },
+    boot      = { 74, 84, 62, 255 },
 }
 
 function Art.Color(c, alpha)
     return nvgRGBA(c[1], c[2], c[3], alpha or c[4] or 255)
 end
 
-function Art.Rect(vg, x, y, w, h, color, radius)
+-- 卡通轮廓统一出口：圆角连接 + 圆头线帽。
+local function stroke(vg, color, width)
+    nvgStrokeColor(vg, Art.Color(color))
+    nvgStrokeWidth(vg, width or 1.5)
+    nvgLineJoin(vg, NVG_ROUND)
+    nvgLineCap(vg, NVG_ROUND)
+    nvgStroke(vg)
+end
+
+-- 对调用方已构建好的路径描边（保持统一的圆角连接与线帽）。
+function Art.Stroke(vg, color, width)
+    stroke(vg, color, width)
+end
+
+local function fillStroke(vg, fill, outline, width)
+    nvgFillColor(vg, Art.Color(fill))
+    nvgFill(vg)
+    if outline then stroke(vg, outline, width) end
+end
+
+-- 有机斑块路径：卡通树冠/土路都靠它避免死板的正圆。
+local function blobPath(vg, x, y, r, seed, wobble)
+    local n = 12
+    for i = 0, n - 1 do
+        local a = i / n * math.pi * 2
+        local rr = r * (1 + math.sin(a * 3 + seed) * wobble + math.cos(a * 5 + seed) * wobble * .6)
+        local px, py = x + math.cos(a) * rr, y + math.sin(a) * rr
+        if i == 0 then nvgMoveTo(vg, px, py) else nvgLineTo(vg, px, py) end
+    end
+    nvgClosePath(vg)
+end
+
+function Art.Rect(vg, x, y, w, h, color, radius, outline, ow)
     if w <= 0 or h <= 0 then return end
     nvgBeginPath(vg)
     if radius and radius > 0 then nvgRoundedRect(vg, x, y, w, h, radius)
     else nvgRect(vg, x, y, w, h) end
-    nvgFillColor(vg, Art.Color(color))
-    nvgFill(vg)
+    fillStroke(vg, color, outline, ow or 1.2)
 end
 
 function Art.Line(vg, x1, y1, x2, y2, color, width)
     nvgBeginPath(vg)
     nvgMoveTo(vg, x1, y1)
     nvgLineTo(vg, x2, y2)
-    nvgStrokeColor(vg, Art.Color(color))
-    nvgStrokeWidth(vg, width or 1)
-    nvgStroke(vg)
+    stroke(vg, color, width or 1)
 end
 
-function Art.Circle(vg, x, y, r, color)
+function Art.Circle(vg, x, y, r, color, outline, ow)
     nvgBeginPath(vg)
     nvgCircle(vg, x, y, r)
-    nvgFillColor(vg, Art.Color(color))
-    nvgFill(vg)
+    fillStroke(vg, color, outline, ow or 1.2)
 end
 
-function Art.Ellipse(vg, x, y, rx, ry, color)
+function Art.Ellipse(vg, x, y, rx, ry, color, outline, ow)
     nvgBeginPath(vg)
     nvgEllipse(vg, x, y, rx, ry)
-    nvgFillColor(vg, Art.Color(color))
-    nvgFill(vg)
+    fillStroke(vg, color, outline, ow or 1.2)
 end
 
-function Art.Polygon(vg, points, color)
+function Art.Polygon(vg, points, color, outline, ow)
     nvgBeginPath(vg)
     nvgMoveTo(vg, points[1], points[2])
-    for i = 3, #points, 2 do nvgLineTo(vg, points[i], points[i+1]) end
+    for i = 3, #points, 2 do nvgLineTo(vg, points[i], points[i + 1]) end
     nvgClosePath(vg)
-    nvgFillColor(vg, Art.Color(color))
-    nvgFill(vg)
+    fillStroke(vg, color, outline, ow or 1.2)
+end
+
+-- 草丛与小花：地图上的低成本点缀，让草地不那么平。
+function Art.GrassTuft(vg, x, y, s)
+    local g = { 96, 148, 66, 220 }
+    Art.Line(vg, x, y, x - s * .30, y - s * .62, g, s * .16)
+    Art.Line(vg, x, y, x + s * .06, y - s * .80, g, s * .16)
+    Art.Line(vg, x, y, x + s * .38, y - s * .58, g, s * .16)
+end
+
+function Art.Flower(vg, x, y, s, color)
+    Art.Circle(vg, x - s * .22, y, s * .20, color)
+    Art.Circle(vg, x + s * .22, y, s * .20, color)
+    Art.Circle(vg, x, y - s * .24, s * .20, color)
+    Art.Circle(vg, x, y + s * .20, s * .20, color)
+    Art.Circle(vg, x, y, s * .16, { 246, 214, 120, 255 })
 end
 
 -- 踩踏痕迹：等级越高，土色越实、车辙越深。
+-- 2 级以上刻意不描边、不留圆角，让相邻格自然连成一条连续道路。
 function Art.Trail(vg, x, y, s, level, seed)
+    local p = Art.palette
     local k = ((seed * 37) % 17) / 17
     if level == 1 then
-        Art.Rect(vg,x+s*.12,y+s*.14,s*.76,s*.72,{ 156, 142, 100, 74 },2)
-        Art.Circle(vg,x+s*.33,y+s*.4,1,{ 146, 133, 94, 120 })
-        Art.Circle(vg,x+s*.7,y+s*.66,1,{ 146, 133, 94, 120 })
+        nvgBeginPath(vg)
+        blobPath(vg, x + s * .5, y + s * .5, s * .44, seed, .16)
+        nvgFillColor(vg, Art.Color({ 178, 160, 110, 170 })); nvgFill(vg)
+        Art.Circle(vg, x + s * .33, y + s * .40, s * .07, { 150, 132, 88, 170 })
+        Art.Circle(vg, x + s * .70, y + s * .66, s * .07, { 150, 132, 88, 170 })
     elseif level == 2 then
-        Art.Rect(vg,x+s*.05,y+s*.06,s*.9,s*.88,{ 172, 152, 108, 255 },2)
-        Art.Rect(vg,x+s*.1,y+s*.1,s*.8,s*.8,{ 183, 162, 116, 255 },1)
-        Art.Line(vg,x+s*.2,y+s*.34+k*.1,x+s*.82,y+s*.34+k*.1,{ 143, 126, 90, 140 },1)
-        Art.Line(vg,x+s*.2,y+s*.68-k*.1,x+s*.82,y+s*.68-k*.1,{ 143, 126, 90, 140 },1)
+        Art.Rect(vg, x, y, s, s, p.road)
+        Art.Line(vg, x + s * .12, y + s * (.34 + k * .10), x + s * .88, y + s * (.34 + k * .10), p.roadDark, s * .06)
+        Art.Line(vg, x + s * .12, y + s * (.68 - k * .10), x + s * .88, y + s * (.68 - k * .10), p.roadDark, s * .06)
     elseif level == 3 then
-        Art.Rect(vg,x,y,s,s,{ 166, 170, 148, 255 },2)
-        Art.Rect(vg,x+1,y+1,s-2,s-2,{ 176, 179, 157, 255 },1)
-        Art.Line(vg,x+s*.5,y+3,x+s*.5,y+s-3,{ 134, 148, 136, 120 },1)
-        Art.Line(vg,x+3,y+s*.5,x+s-3,y+s*.5,{ 134, 148, 136, 120 },1)
-        Art.Circle(vg,x+s*.28,y+s*.3,1.2,{ 148, 152, 132, 200 })
-        Art.Circle(vg,x+s*.74,y+s*.72,1.2,{ 148, 152, 132, 200 })
+        Art.Rect(vg, x, y, s, s, p.road)
+        Art.Rect(vg, x + s * .12, y + s * .12, s * .76, s * .76, p.roadLight)
+        Art.Circle(vg, x + s * .28, y + s * .30, s * .07, { 150, 132, 88, 140 })
+        Art.Circle(vg, x + s * .74, y + s * .72, s * .07, { 150, 132, 88, 140 })
     else
-        Art.Rect(vg,x,y,s,s,{ 178, 184, 164, 255 },2)
-        Art.Rect(vg,x+1,y+1,s-2,s-2,{ 190, 196, 176, 255 },1)
-        Art.Line(vg,x+s*.5,y+2,x+s*.5,y+s-2,{ 150, 176, 168, 130 },1)
-        Art.Line(vg,x+2,y+s*.5,x+s-2,y+s*.5,{ 150, 176, 168, 130 },1)
-        Art.Polygon(vg,{ x+s*.32,y+s*.32,x+s*.7,y+s*.5,x+s*.32,y+s*.68 },{ 232, 216, 148, 235 })
+        -- 硬化路面：石砖铺装 + 中央金色加速箭头
+        Art.Rect(vg, x, y, s, s, { 190, 196, 204, 255 })
+        Art.Rect(vg, x + s * .09, y + s * .09, s * .82, s * .82, { 208, 214, 222, 255 })
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, x + s * .5, y + s * .09); nvgLineTo(vg, x + s * .5, y + s * .91)
+        nvgMoveTo(vg, x + s * .09, y + s * .5); nvgLineTo(vg, x + s * .91, y + s * .5)
+        stroke(vg, { 168, 190, 198, 150 }, s * .05)
+        Art.Polygon(vg, { x + s * .28, y + s * .30, x + s * .70, y + s * .50, x + s * .28, y + s * .70 },
+            { 242, 210, 124, 245 }, p.outline, s * .05)
     end
 end
 
+-- 卡通圆冠树：木干 + 有机树冠 + 高光。
 function Art.Tree(vg, x, y, s)
-    Art.Ellipse(vg, x, y+s*.12, s*.6, s*.22, { 31, 43, 33, 60 })
-    Art.Rect(vg,x-s*.09,y-s*.15,s*.18,s*.4,{ 83, 79, 52, 255 })
-    Art.Polygon(vg,{ x,y-s*1.1,x-s*.55,y-s*.05,x+s*.55,y-s*.05 },{ 47, 72, 52, 255 })
-    Art.Polygon(vg,{ x,y-s*1.3,x-s*.43,y-s*.4,x+s*.43,y-s*.4 },{ 57, 87, 62, 255 })
-    Art.Polygon(vg,{ x,y-s*1.3,x-s*.43,y-s*.4,x,y-s*.6 },{ 72, 101, 68, 255 })
+    local p = Art.palette
+    Art.Ellipse(vg, x, y + s * .18, s * .58, s * .20, p.shadow)
+    Art.Rect(vg, x - s * .09, y - s * .26, s * .18, s * .46, p.wood, s * .05, p.outline, s * .07)
+    nvgBeginPath(vg)
+    blobPath(vg, x, y - s * .70, s * .62, x * .03 + y * .07, .10)
+    fillStroke(vg, { 70, 128, 72, 255 }, p.outline, s * .07)
+    nvgBeginPath(vg)
+    blobPath(vg, x - s * .05, y - s * .80, s * .44, x * .05 + y * .03, .13)
+    nvgFillColor(vg, Art.Color({ 106, 174, 94, 255 })); nvgFill(vg)
+    nvgBeginPath(vg)
+    blobPath(vg, x - s * .16, y - s * .92, s * .19, 1.7, .18)
+    nvgFillColor(vg, Art.Color({ 142, 204, 114, 210 })); nvgFill(vg)
 end
 
+-- 石墙：圆角石块 + 砖缝 + 顶面高光。
 function Art.Wall(vg, x, y, s)
-    Art.Rect(vg,x+s*.17,y+s*.10,s*.72,s*.92,{ 37, 46, 39, 75 },2)
-    Art.Rect(vg,x+s*.08,y,s*.68,s,{ 179, 175, 145, 255 })
-    Art.Rect(vg,x+s*.58,y,s*.18,s,{ 142, 148, 123, 255 })
-    Art.Rect(vg,x+s*.03,y+s*.07,s*.77,s*.14,{ 207, 199, 164, 255 })
-    Art.Rect(vg,x+s*.03,y+s*.57,s*.77,s*.12,{ 193, 185, 155, 255 })
-    Art.Line(vg,x+s*.34,y+s*.23,x+s*.34,y+s*.54,{ 144, 148, 122, 180 },1)
-    Art.Line(vg,x+s*.48,y+s*.71,x+s*.48,y+s*.99,{ 144, 148, 122, 180 },1)
-    Art.Rect(vg,x+s*.03,y,s*.16,s*.24,{ 211, 200, 166, 255 })
-    Art.Rect(vg,x+s*.39,y,s*.16,s*.24,{ 211, 200, 166, 255 })
+    local p = Art.palette
+    Art.Rect(vg, x + s * .06, y + s * .10, s * .94, s * .90, { 30, 40, 30, 70 }, s * .12)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, x + s * .03, y + s * .03, s * .94, s * .94, s * .12)
+    fillStroke(vg, p.stone, p.outline, s * .07)
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, x + s * .03, y + s * .38); nvgLineTo(vg, x + s * .97, y + s * .38)
+    nvgMoveTo(vg, x + s * .03, y + s * .70); nvgLineTo(vg, x + s * .97, y + s * .70)
+    nvgMoveTo(vg, x + s * .36, y + s * .03); nvgLineTo(vg, x + s * .36, y + s * .38)
+    nvgMoveTo(vg, x + s * .68, y + s * .38); nvgLineTo(vg, x + s * .68, y + s * .70)
+    nvgMoveTo(vg, x + s * .36, y + s * .70); nvgLineTo(vg, x + s * .36, y + s * .97)
+    stroke(vg, p.stoneDark, s * .05)
+    Art.Rect(vg, x + s * .12, y + s * .07, s * .76, s * .11, p.stoneLite, s * .05)
 end
 
+-- 旗帜：木杆 + 飘动三角旗。
 function Art.Flag(vg, x, y, s, color, time)
-    Art.Line(vg,x,y,x,y-s,{ 218, 208, 162, 255 },1.5)
-    local flutter = math.sin(time * 3) * s*.07
-    Art.Polygon(vg,{ x,y-s,x+s*.55,y-s+flutter,x+s*.45,y-s*.58+flutter,x,y-s*.60 },color)
+    local p = Art.palette
+    Art.Rect(vg, x - s * .05, y - s, s * .10, s, p.wood, s * .04, p.outline, s * .05)
+    local flutter = math.sin(time * 3) * s * .08
+    Art.Polygon(vg, {
+        x + s * .05, y - s,
+        x + s * .70, y - s + flutter,
+        x + s * .58, y - s * .60 + flutter,
+        x + s * .05, y - s * .58,
+    }, color, p.outline, s * .05)
+end
+
+-- 木屋通用件：墙体 + 梯形屋顶 + 门窗。
+local function house(vg, x, y, w, h, roof, roofDark, opts)
+    local p = Art.palette
+    opts = opts or {}
+    Art.Ellipse(vg, x + w * .52, y + h * .88, w * .48, h * .14, p.shadow)
+    -- 墙体
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, x + w * .13, y + h * .42, w * .74, h * .48, w * .05)
+    fillStroke(vg, p.wood, p.outline, w * .035)
+    -- 墙板竖纹
+    nvgBeginPath(vg)
+    for i = 1, 3 do
+        local xx = x + w * (.13 + i * .185)
+        nvgMoveTo(vg, xx, y + h * .46); nvgLineTo(vg, xx, y + h * .86)
+    end
+    stroke(vg, p.woodDark, w * .022)
+    -- 屋顶梯形（带出檐）
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, x + w * .00, y + h * .50)
+    nvgLineTo(vg, x + w * .28, y + h * .07)
+    nvgLineTo(vg, x + w * .72, y + h * .07)
+    nvgLineTo(vg, x + w * 1.00, y + h * .50)
+    nvgClosePath(vg)
+    fillStroke(vg, roof, p.outline, w * .04)
+    -- 屋顶右半阴影
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, x + w * .50, y + h * .07)
+    nvgLineTo(vg, x + w * .72, y + h * .07)
+    nvgLineTo(vg, x + w * 1.00, y + h * .50)
+    nvgLineTo(vg, x + w * .50, y + h * .50)
+    nvgClosePath(vg)
+    nvgFillColor(vg, Art.Color(roofDark)); nvgFill(vg)
+    -- 屋脊高光
+    Art.Rect(vg, x + w * .28, y + h * .07, w * .44, h * .05, { 255, 255, 255, 70 }, h * .02)
+    -- 门
+    local doorW, doorH = w * .20, h * .30
+    Art.Rect(vg, x + w * .40, y + h * .60, doorW, doorH, p.woodDark, doorW * .28, p.outline, w * .028)
+    -- 窗
+    Art.Rect(vg, x + w * .20, y + h * .56, w * .13, h * .13, { 250, 214, 132, 255 }, w * .02, p.outline, w * .026)
+    Art.Rect(vg, x + w * .67, y + h * .56, w * .13, h * .13, { 250, 214, 132, 255 }, w * .02, p.outline, w * .026)
+    if opts.emblem then opts.emblem(vg, x + w * .5, y + h * .30, w * .17) end
+end
+
+-- 圆形盾徽，工坊类建筑共用。
+local function shieldEmblem(vg, cx, cy, r, fill)
+    local p = Art.palette
+    Art.Polygon(vg, {
+        cx - r, cy - r * .95, cx + r, cy - r * .95,
+        cx + r, cy + r * .25, cx, cy + r * 1.05, cx - r, cy + r * .25,
+    }, fill, p.outline, r * .16)
+    Art.Line(vg, cx, cy - r * .7, cx, cy + r * .7, { 255, 255, 255, 120 }, r * .14)
 end
 
 function Art.Building(vg, kind, x, y, s, stock, progress, time)
+    local p = Art.palette
     local def = C.buildings[kind]
-    local w,h = def.w*s,def.h*s
-    Art.Ellipse(vg,x+w*.55,y+h*.80,w*.46,h*.15,{ 34, 42, 32, 85 })
-    if kind == "block" then Art.Wall(vg,x,y,s); return end
+    local w, h = def.w * s, def.h * s
+    if kind == "block" then Art.Wall(vg, x, y, s); return end
+
     if kind == "tower" then
-        Art.Rect(vg,x+s*.13,y+s*.03,s*.7,s*.84,{ 189, 181, 148, 255 },2)
-        Art.Rect(vg,x+s*.17,y+s*.3,s*.6,s*.3,{ 121, 132, 116, 255 })
-        Art.Polygon(vg,{ x-s*.04,y+s*.23,x+s*.47,y-s*.15,x+s*.96,y+s*.23 },{ 96, 116, 107, 255 })
-        Art.Line(vg,x+s*.3,y+s*.53,x+s*.77,y+s*.53,{ 55, 67, 60, 255 },3)
-        Art.Line(vg,x+s*.52,y+s*.34,x+s*.52,y+s*.70,{ 57, 70, 60, 255 },2)
+        Art.Ellipse(vg, x + s * .55, y + s * .92, s * .40, s * .12, p.shadow)
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, x + s * .18, y + s * .24, s * .64, s * .72, s * .05)
+        fillStroke(vg, p.stone, p.outline, s * .07)
+        nvgBeginPath(vg)
+        for i = 1, 2 do
+            local yy = y + s * (.24 + i * .24)
+            nvgMoveTo(vg, x + s * .18, yy); nvgLineTo(vg, x + s * .82, yy)
+        end
+        stroke(vg, p.stoneDark, s * .05)
+        -- 顶部垛口
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, x + s * .10, y + s * .10, s * .80, s * .20, s * .04)
+        fillStroke(vg, p.stoneLite, p.outline, s * .06)
+        for i = 0, 3 do
+            Art.Rect(vg, x + s * (.11 + i * .205), y + s * .01, s * .13, s * .15, p.stoneLite, s * .03, p.outline, s * .05)
+        end
+        -- 箭孔
+        Art.Rect(vg, x + s * .44, y + s * .46, s * .12, s * .28, { 62, 52, 44, 255 }, s * .05, p.outline, s * .045)
         return
     end
+
+    local roof, roofDark = p.roofRed, p.roofRedD
+    local emblem
     if kind == "barracks" then
-        Art.Rect(vg,x+w*.15,y+h*.4,w*.70,h*.4,{ 167, 135, 91, 255 },2)
-        Art.Polygon(vg,{ x+w*.04,y+h*.48,x+w*.45,y+h*.12,x+w*.94,y+h*.48 },{ 217, 184, 123, 255 })
-        Art.Polygon(vg,{ x+w*.45,y+h*.12,x+w*.94,y+h*.48,x+w*.50,y+h*.48 },{ 173, 131, 82, 255 })
-        Art.Polygon(vg,{ x+w*.15,y+h*.8,x+w*.48,y+h*.42,x+w*.76,y+h*.8 },{ 221, 195, 145, 255 })
-        Art.Polygon(vg,{ x+w*.37,y+h*.8,x+w*.48,y+h*.48,x+w*.58,y+h*.8 },{ 58, 66, 47, 255 })
-        Art.Flag(vg,x+w*.45,y+h*.13,s*.55,{ 208, 138, 93, 255 },time)
-    elseif kind == "elephant" or kind == "stable" then
-        Art.Rect(vg,x+w*.11,y+h*.28,w*.78,h*.47,{ 143, 115, 82, 255 },2)
-        Art.Polygon(vg,{ x+w*.02,y+h*.31,x+w*.23,y+h*.12,x+w*.79,y+h*.12,x+w*.97,y+h*.31 },def.color)
-        Art.Rect(vg,x+w*.21,y+h*.4,w*.27,h*.34,{ 64, 67, 47, 255 },2)
-        Art.Rect(vg,x+w*.57,y+h*.4,w*.23,h*.34,{ 64, 67, 47, 255 },2)
-        Art.Line(vg,x+w*.03,y+h*.82,x+w*.95,y+h*.82,{ 200, 169, 114, 255 },3)
-        for i=1,4 do Art.Line(vg,x+w*(i*.2),y+h*.65,x+w*(i*.2),y+h*.92,{ 184, 154, 101, 255 },2) end
-    else
-        Art.Rect(vg,x+w*.14,y+h*.29,w*.72,h*.47,{ 176, 161, 113, 255 },2)
-        Art.Rect(vg,x+w*.2,y+h*.49,w*.6,h*.18,{ 74, 85, 58, 255 },2)
-        Art.Polygon(vg,{ x+w*.03,y+h*.31,x+w*.22,y+h*.17,x+w*.76,y+h*.17,x+w*.97,y+h*.31 },def.color)
-        if kind == "shield" then
-            Art.Polygon(vg,{ x+w*.35,y+h*.42,x+w*.69,y+h*.42,x+w*.69,y+h*.56,x+w*.52,y+h*.64,x+w*.35,y+h*.56 },{ 158, 195, 191, 255 })
-        else
-            nvgBeginPath(vg)
-            nvgMoveTo(vg,x+w*.4,y+h*.39)
-            nvgBezierTo(vg,x+w*.84,y+h*.43,x+w*.84,y+h*.59,x+w*.4,y+h*.65)
-            nvgStrokeColor(vg,nvgRGBA(213,200,141,255)); nvgStrokeWidth(vg,2); nvgStroke(vg)
-            Art.Line(vg,x+w*.4,y+h*.39,x+w*.4,y+h*.65,{ 224, 207, 150, 255 },1)
+        roof, roofDark = p.roofRed, p.roofRedD
+        emblem = function(g, cx, cy, r)
+            -- 交叉双剑
+            Art.Line(g, cx - r, cy + r, cx + r, cy - r, p.metalLite or p.stoneLite, r * .22)
+            Art.Line(g, cx + r, cy + r, cx - r, cy - r, p.metalLite or p.stoneLite, r * .22)
+        end
+    elseif kind == "shield" then
+        roof, roofDark = p.roofBlue, p.roofBlueD
+        emblem = function(g, cx, cy, r) shieldEmblem(g, cx, cy, r, { 150, 198, 206, 255 }) end
+    elseif kind == "bow" then
+        roof, roofDark = p.roofGreen, p.roofGreenD
+        emblem = function(g, cx, cy, r)
+            nvgBeginPath(g)
+            nvgMoveTo(g, cx - r * .6, cy - r)
+            nvgQuadTo(g, cx + r * 1.5, cy, cx - r * .6, cy + r)
+            stroke(g, { 226, 214, 158, 255 }, r * .26)
+            Art.Line(g, cx - r * .6, cy - r, cx - r * .6, cy + r, { 240, 232, 190, 200 }, r * .16)
+        end
+    elseif kind == "stable" then
+        roof, roofDark = p.roofOrange, p.roofOrangeD
+        emblem = function(g, cx, cy, r)
+            -- 马蹄铁
+            nvgBeginPath(g)
+            nvgMoveTo(g, cx - r, cy + r * .6)
+            nvgLineTo(g, cx - r, cy)
+            nvgLineTo(g, cx + r, cy)
+            nvgLineTo(g, cx + r, cy + r * .6)
+            stroke(g, { 246, 226, 170, 255 }, r * .34)
+        end
+    elseif kind == "elephant" then
+        roof, roofDark = p.roofPurple, p.roofPurpleD
+        emblem = function(g, cx, cy, r)
+            Art.Circle(g, cx, cy, r * .8, { 224, 208, 244, 255 }, p.outline, r * .18)
         end
     end
-    Art.Rect(vg,x+w*.15,y+h*.92,w*.7,3,{ 45, 56, 39, 220 },1)
-    Art.Rect(vg,x+w*.15,y+h*.92,w*.7*progress,3,def.color,1)
+
+    house(vg, x, y, w, h, roof, roofDark, { emblem = emblem })
+    -- 库存进度条
+    local bx, by, bw = x + w * .15, y + h * .93, w * .70
+    Art.Rect(vg, bx, by, bw, 3, { 45, 56, 39, 220 }, 1.5)
+    Art.Rect(vg, bx, by, bw * progress, 3, def.color, 1.5)
     if stock and stock > 0 then
-        for i=1,stock do Art.Circle(vg,x+w*.17+(i-1)*5,y+h*.86,1.7,{ 237, 205, 132, 255 }) end
+        for i = 1, stock do
+            Art.Circle(vg, x + w * .18 + (i - 1) * 5, y + h * .86, 1.8, { 240, 210, 138, 255 }, p.outline, .8)
+        end
     end
+end
+
+-- 圆头盔：只盖头顶的穹顶 + 帽檐，脸部必须露出来，否则会糊成一团。
+local function helm(vg, z, yTop, color, dark)
+    Art.Ellipse(vg, 0, yTop - z * .13, z * .29, z * .20, color, Art.palette.outline, z * .08)
+    Art.Rect(vg, -z * .33, yTop + z * .01, z * .66, z * .10, dark, z * .05, Art.palette.outline, z * .065)
+end
+
+-- Q版士兵：圆头盔 + 厚轮廓 + 武器。facing 决定朝向（-1 左 / 1 右）。
+local function soldier(vg, u, z, t, p)
+    local color = u.flash > 0 and { 255, 246, 224, 255 } or t.color
+    local f = u.facing
+    -- 腿
+    Art.Rect(vg, -z * .28, z * .18, z * .21, z * .40, p.boot, z * .08, p.outline, z * .07)
+    Art.Rect(vg, z * .07, z * .18, z * .21, z * .40, p.boot, z * .08, p.outline, z * .07)
+    -- 躯干 + 腰带（腰带把上衣和裤子色块切开，避免整体糊成一块）
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, -z * .40, -z * .30, z * .80, z * .60, z * .22)
+    fillStroke(vg, color, p.outline, z * .11)
+    Art.Rect(vg, -z * .41, z * .04, z * .82, z * .13, p.woodDark, z * .03, p.outline, z * .06)
+    -- 武器
+    if t.ranged then
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, z * .50 * f, -z * .40)
+        nvgQuadTo(vg, z * 1.08 * f, -z * .02, z * .50 * f, z * .40)
+        stroke(vg, { 214, 176, 108, 255 }, z * .11)
+        Art.Line(vg, z * .50 * f, -z * .40, z * .50 * f, z * .40, { 240, 232, 190, 220 }, z * .06)
+    else
+        Art.Line(vg, z * .46 * f, z * .32, z * 1.02 * f, -z * .54, { 226, 232, 240, 255 }, z * .15)
+        Art.Line(vg, z * .38 * f, z * .12, z * .70 * f, z * .28, { 240, 214, 130, 255 }, z * .13)
+    end
+    -- 头（含眼睛），头盔只扣在头顶
+    Art.Circle(vg, 0, -z * .48, z * .30, p.skin, p.outline, z * .085)
+    Art.Circle(vg, -z * .12, -z * .30, z * .05, { 62, 48, 42, 255 })
+    Art.Circle(vg, z * .12, -z * .30, z * .05, { 62, 48, 42, 255 })
+    helm(vg, z, -z * .62, p.metal, p.metalDark)
+    -- 重甲/盾兵额外举盾
+    if u.kind == "heavy" or u.kind == "brute" then
+        Art.Polygon(vg, {
+            z * .28 * f, -z * .30, z * .88 * f, -z * .30,
+            z * .88 * f, z * .26, z * .58 * f, z * .50, z * .28 * f, z * .26,
+        }, { 196, 212, 220, 255 }, p.outline, z * .08)
+    end
+end
+
+-- 骑兵：马 + 骑手。
+local function cavalry(vg, u, z, t, p)
+    local color = u.flash > 0 and { 255, 246, 224, 255 } or t.color
+    local f = u.facing
+    -- 马身
+    Art.Ellipse(vg, 0, z * .18, z * .92, z * .44, { 150, 118, 80, 255 }, p.outline, z * .10)
+    -- 马腿
+    Art.Line(vg, -z * .52, z * .30, -z * .66, z * .86, { 132, 104, 70, 255 }, z * .24)
+    Art.Line(vg, z * .56, z * .30, z * .68, z * .84, { 132, 104, 70, 255 }, z * .24)
+    -- 马头
+    Art.Circle(vg, z * .88 * f, -z * .06, z * .34, { 168, 132, 90, 255 }, p.outline, z * .09)
+    -- 骑手躯干
+    Art.Rect(vg, -z * .30, -z * .58, z * .58, z * .58, color, z * .16, p.outline, z * .10)
+    -- 骑手头 + 头盔
+    Art.Circle(vg, 0, -z * .72, z * .26, p.skin, p.outline, z * .08)
+    Art.Circle(vg, -z * .10, -z * .58, z * .045, { 62, 48, 42, 255 })
+    Art.Circle(vg, z * .10, -z * .58, z * .045, { 62, 48, 42, 255 })
+    helm(vg, z * .92, -z * .86, p.metal, p.metalDark)
+end
+
+-- 大型单位（大象 / 破城巨兽）。
+local function beast(vg, u, z, t, p)
+    local color = u.flash > 0 and { 255, 246, 224, 255 } or t.color
+    local f = u.facing
+    -- 躯干
+    Art.Ellipse(vg, 0, -z * .08, z * .82, z * .54, color, p.outline, z * .10)
+    -- 头
+    Art.Circle(vg, z * .62 * f, -z * .16, z * .46, color, p.outline, z * .10)
+    -- 长鼻 / 犄角
+    if u.kind == "elephant" then
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, z * 1.0 * f, -z * .04)
+        nvgQuadTo(vg, z * 1.26 * f, z * .34, z * .96 * f, z * .60)
+        stroke(vg, color, z * .22)
+        Art.Ellipse(vg, z * .74 * f, -z * .30, z * .16, z * .20, color, p.outline, z * .07)
+    else
+        Art.Polygon(vg, { z * .50 * f, -z * .40, z * .92 * f, -z * .92, z * 1.06 * f, -z * .34 },
+            { 240, 224, 190, 255 }, p.outline, z * .08)
+        Art.Polygon(vg, { z * .30 * f, -z * .44, z * .52 * f, -z * .98, z * .70 * f, -z * .40 },
+            { 240, 224, 190, 255 }, p.outline, z * .08)
+    end
+    -- 四条腿
+    Art.Line(vg, -z * .50, z * .32, -z * .58, z * .86, color, z * .24)
+    Art.Line(vg, z * .18, z * .32, z * .14, z * .86, color, z * .24)
 end
 
 function Art.Unit(vg, u, x, y, s, time)
+    local p = Art.palette
     local t = C.units[u.kind]
-    local color = u.flash > 0 and { 255, 243, 211, 255 } or t.color
-    local z = s * (u.size == 2 and 0.7 or 0.32)
-    Art.Ellipse(vg,x,y+z*.58,z*.9,z*.35,{ 26, 38, 28, 90 })
+    local z = s * (u.size == 2 and 0.74 or 0.38)
+    Art.Ellipse(vg, x, y + z * .66, z * .94, z * .36, { 34, 46, 30, 95 })
     nvgSave(vg)
-    nvgTranslate(vg,x,y)
-    local bob = u.moving and math.sin(time*12+u.id)*z*.09 or 0
-    nvgTranslate(vg,0,bob)
-    if u.size == 2 then
-        Art.Ellipse(vg,0,-z*.1,z*.78,z*.50,color)
-        Art.Ellipse(vg,z*.59*u.facing,-z*.1,z*.45,z*.47,color)
-        Art.Ellipse(vg,z*.36*u.facing,-z*.16,z*.33,z*.41,{ 137, 131, 139, 255 })
-        Art.Rect(vg,-z*.56,z*.2,z*.20,z*.43,color,2)
-        Art.Rect(vg,z*.24,z*.2,z*.22,z*.43,color,2)
-        Art.Line(vg,z*.91*u.facing,-z*.03,z*1.03*u.facing,z*.58,color,z*.19)
-        Art.Line(vg,z*.79*u.facing,z*.14,z*1.08*u.facing,z*.01,{ 229, 217, 182, 255 },z*.10)
-        Art.Rect(vg,-z*.32,-z*.58,z*.6,z*.3,{ 105, 81, 78, 255 },2)
-        if u.kind == "boss" then
-            Art.Polygon(vg,{ -z*.5,-z*.47,-z*.38,-z*.95,-z*.23,-z*.54 },{ 213, 172, 137, 255 })
-            Art.Polygon(vg,{ z*.1,-z*.47,z*.28,-z*.93,z*.36,-z*.46 },{ 213, 172, 137, 255 })
-        end
-    elseif u.kind == "cavalry" then
-        Art.Ellipse(vg,0,z*.18,z,z*.43,{ 144, 115, 80, 255 })
-        Art.Line(vg,-z*.5,z*.3,-z*.65,z*.86,{ 127, 103, 72, 255 },z*.24)
-        Art.Line(vg,z*.55,z*.3,z*.66,z*.83,{ 127, 103, 72, 255 },z*.24)
-        Art.Circle(vg,z*.86*u.facing,-z*.02,z*.34,{ 164, 129, 86, 255 })
-        Art.Rect(vg,-z*.29,-z*.56,z*.57,z*.56,color,2)
-        Art.Circle(vg,0,-z*.73,z*.28,{ 226, 202, 159, 255 })
-    else
-        Art.Line(vg,-z*.22,z*.26,-z*.38,z*.69,{ 63, 74, 54, 255 },z*.23)
-        Art.Line(vg,z*.17,z*.26,z*.31,z*.69,{ 63, 74, 54, 255 },z*.23)
-        Art.Rect(vg,-z*.48,-z*.42,z*.92,z*.80,color,z*.18)
-        Art.Circle(vg,0,-z*.61,z*.39,{ 226, 203, 159, 255 })
-        Art.Ellipse(vg,-z*.02,-z*.77,z*.44,z*.25,color)
-        if u.kind == "heavy" or u.kind == "brute" then
-            Art.Rect(vg,z*.1*u.facing,-z*.1,z*.63,z*.7,color,2)
-            Art.Line(vg,z*.47*u.facing,-z*.06,z*.47*u.facing,z*.48,{ 208, 225, 204, 255 },1)
-        elseif t.ranged then
-            Art.Line(vg,z*.65*u.facing,-z*.49,z*.65*u.facing,z*.52,{ 208, 193, 126, 255 },1.5)
-            Art.Line(vg,z*.4*u.facing,-z*.17,z*1.1*u.facing,-z*.17,{ 226, 214, 158, 255 },1)
-        else
-            Art.Line(vg,z*.5*u.facing,z*.26,z*1.04*u.facing,-z*.52,{ 214, 220, 188, 255 },2)
-        end
-    end
+    nvgTranslate(vg, x, y)
+    local bob = u.moving and math.sin(time * 12 + u.id) * z * .08 or 0
+    nvgTranslate(vg, 0, bob)
+    if u.size == 2 then beast(vg, u, z, t, p)
+    elseif u.kind == "cavalry" then cavalry(vg, u, z, t, p)
+    else soldier(vg, u, z, t, p) end
     nvgRestore(vg)
     if u.hp < u.maxHp then
-        Art.Rect(vg,x-z,y-z*1.15,z*2,2,{ 40, 47, 35, 230 },1)
-        Art.Rect(vg,x-z,y-z*1.15,z*2*math.max(0,u.hp/u.maxHp),2,color,1)
+        Art.Rect(vg, x - z, y - z * 1.25, z * 2, 2.5, { 42, 50, 38, 235 }, 1.2)
+        Art.Rect(vg, x - z, y - z * 1.25, z * 2 * math.max(0, u.hp / u.maxHp), 2.5,
+            u.team == "ally" and { 128, 208, 112, 255 } or { 226, 118, 96, 255 }, 1.2)
     end
     if u.blocked > 1 then
-        Art.Circle(vg,x+z*.6,y-z*1.2,2,{ 238, 178, 86, 255 })
+        Art.Circle(vg, x + z * .62, y - z * 1.28, 2.2, { 244, 188, 92, 255 }, p.outline, .8)
     end
 end
 
-function Art.Resource(vg,r,x,y,s,time)
+-- 资源箱：木箱 + 金色包边。
+function Art.Resource(vg, r, x, y, s, time)
+    local p = Art.palette
     if r.remaining <= 0 then return end
-    Art.Ellipse(vg,x,y+s*.19,s*.45,s*.18,{ 34, 45, 31, 70 })
-    Art.Rect(vg,x-s*.32,y-s*.20,s*.64,s*.40,{ 148, 115, 67, 255 },3)
-    Art.Rect(vg,x-s*.36,y-s*.25,s*.72,s*.15,{ 205, 169, 99, 255 },2)
-    Art.Line(vg,x-s*.17,y-s*.22,x-s*.17,y+s*.20,{ 230, 203, 139, 255 },2)
-    Art.Line(vg,x+s*.17,y-s*.22,x+s*.17,y+s*.20,{ 230, 203, 139, 255 },2)
-    Art.Circle(vg,x,y-s*.37,2+math.sin(time*2+r.id)*.5,{ 243, 211, 138, 240 })
-    if r.tech > 0 then Art.Circle(vg,x+s*.25,y-s*.38,2,{ 155, 196, 205, 255 }) end
-    for i=1,r.remaining do Art.Circle(vg,x-s*.20+(i-1)*5,y+s*.31,1.5,{ 224, 202, 147, 255 }) end
+    Art.Ellipse(vg, x, y + s * .22, s * .44, s * .16, { 34, 46, 30, 80 })
+    Art.Rect(vg, x - s * .32, y - s * .18, s * .64, s * .40, p.wood, s * .08, p.outline, s * .06)
+    Art.Rect(vg, x - s * .36, y - s * .24, s * .72, s * .16, p.gold, s * .06, p.outline, s * .06)
+    Art.Line(vg, x - s * .17, y - s * .20, x - s * .17, y + s * .20, { 246, 222, 158, 255 }, s * .07)
+    Art.Line(vg, x + s * .17, y - s * .20, x + s * .17, y + s * .20, { 246, 222, 158, 255 }, s * .07)
+    Art.Circle(vg, x, y - s * .38, s * .08 + math.sin(time * 2 + r.id) * s * .015,
+        { 250, 216, 130, 240 }, p.outline, s * .04)
+    if r.tech > 0 then
+        Art.Circle(vg, x + s * .26, y - s * .38, s * .08, { 168, 206, 214, 255 }, p.outline, s * .04)
+    end
+    for i = 1, r.remaining do
+        Art.Circle(vg, x - s * .20 + (i - 1) * s * .13, y + s * .30, s * .05, { 232, 208, 148, 255 })
+    end
 end
+
 return Art

@@ -7,14 +7,16 @@
   "entry": "main.lua",
   "version": "1.0.0",
   "taptap_publish": {
-    "title": "",
+    "title": "梦想成为亡灵大师",
     "description": "",
-    "category": "",
+    "category": "strategy",
     "screen_orientation": "landscape",
     "collection_type": "sce",
-    "trial_note": "",
+    "trial_note": "开发中",
     "app_platforms": "1,2",
-    "developer_id": 470085
+    "developer_id": 470085,
+    "app_id": 968113,
+    "miniapp_id": "tapmc8sadlfwjem8rb"
   },
   "assets": {
     "icon": "",
@@ -22,6 +24,6 @@
     "promotional_image": ""
   },
   "metadata": {
-    "updated_at": "2026-10-08T14:18:55.556Z"
+    "updated_at": "2026-10-10T05:17:03.764Z"
   }
 }

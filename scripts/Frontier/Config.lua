@@ -70,7 +70,7 @@ Config.buildOrder = { "barracks", "shield", "bow", "stable", "elephant", "tower"
 ---@type table<string, FrontierTemplate>
 Config.units = {
     militia = { name = "民兵", hp = 45, armor = 0, damage = 7, range = 0.95,
-        speed = 1.45, interval = 1.1, size = 1, color = { 223, 198, 137 }, sight = 6 },
+        speed = 1.45, interval = 1.1, size = 1, color = { 238, 172, 88 }, sight = 6 },
     heavy = { name = "重甲步兵", hp = 115, armor = 4, damage = 12, range = 1.1,
         speed = 0.85, interval = 1.2, size = 1, color = { 126, 190, 205 }, sight = 5 },
     archer = { name = "弓箭手", hp = 34, armor = 0, damage = 9, range = 5.2, ranged = true,
