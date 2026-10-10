@@ -4,7 +4,7 @@ local Battlefield = require "Frontier.Battlefield"
 local P = {
     bg = { 32, 40, 35, 255 }, panel = { 43, 53, 45, 255 }, card = { 52, 63, 52, 255 },
     line = { 77, 89, 70, 255 }, text = { 230, 226, 202, 255 }, muted = { 148, 163, 136, 255 },
-    gold = { 218, 187, 124, 255 }, cyan = { 148, 190, 188, 255 }, red = { 208, 125, 107, 255 },
+    gold = { 218, 187, 124, 255 }, red = { 208, 125, 107, 255 },
 }
 local function Label(text, size, color, props)
     props = props or {}
@@ -32,7 +32,6 @@ end
 ---@field root Panel
 ---@field battlefield FrontierBattlefield
 ---@field tool string
----@field tab string
 ---@field timer number
 ---@field narrow boolean
 ---@field helpOpen boolean
@@ -49,7 +48,7 @@ end
 
 function Interface:Init(sim)
     self.sim=sim
-    self.tool,self.tab,self.timer="inspect","build",0
+    self.tool,self.timer="inspect",0
     self.narrow=graphics:GetWidth()/UI.GetScale()<1000
     self.helpOpen=false
     self.battlefield=Battlefield { id="battlefield",sim=sim } --[[@as FrontierBattlefield]]
@@ -85,7 +84,6 @@ function Interface:Create()
                 Label("FRONTIER  /  间接指挥 · 波次塔防",9,P.muted,{ letterSpacing=1.5 }),
             } },
             resourceCard("基础资源  /  +2.5每秒","gold",P.gold),
-            resourceCard("科技资源","tech",P.cyan),
             UI.Panel { width=self.narrow and 120 or 174,height=52,paddingHorizontal=14,justifyContent="center",gap=5,
                 borderLeftWidth=1,borderLeftColor=P.line,children={
                     Label("城墙完整度",9,P.muted),
@@ -96,16 +94,9 @@ function Interface:Create()
             Button("?",function() self:Help(true) end,{ width=34,height=34,marginLeft=12 }),
         },
     }
-    local tools={
-        { "inspect","浏览","拖动横向移动" }, { "erase","拆除","返还55%" },
+    local toolButtons={
+        Button("浏览",function() self:Select("inspect") end,{ id="tool_inspect",width="100%",height=34,fontSize=10 }),
     }
-    local toolButtons={}
-    for _,t in ipairs(tools) do
-        local tool=t[1]
-        table.insert(toolButtons,Button(t[2],function() self:Select(tool) end,{
-            id="tool_"..tool,width="48%",height=34,fontSize=10,
-        }))
-    end
     local buildingButtons={}
     for _,kind in ipairs(C.buildOrder) do
         local def=C.buildings[kind]
@@ -126,42 +117,20 @@ function Interface:Create()
         }))
     end
     local buildPage=UI.Panel { id="buildPage",gap=8,children=buildingButtons }
-    local techButtons={}
-    for level=1,3 do
-        local n=level
-        table.insert(techButtons,UI.Panel { padding=12,gap=8,backgroundColor=P.card,borderWidth=1,borderColor=P.line,borderRadius=5,
-            children={
-                Label("0"..level.." / "..C.techNames[level],12,P.gold),
-                Label(C.techDescriptions[level],10,P.muted,{ whiteSpace="normal",maxLines=3,width="100%" }),
-                Button("研发 · "..C.techCosts[level].."科技",function()
-                    if n==sim.techLevel+1 then sim:Upgrade()
-                    elseif n>sim.techLevel then sim:Notify("请依次研发道路科技") end
-                end,{ id="tech_"..level,width="100%",fontSize=10 }),
-            } })
-    end
-    table.insert(techButtons,UI.Panel { padding=12,gap=6,backgroundColor=P.card,borderWidth=1,borderColor=P.line,borderRadius=5,
-        children={
-            Label("当前道路",12,P.gold),
-            Label("营地至城门的主路等级：",10,P.muted,{ whiteSpace="normal",maxLines=2,width="100%" }),
-            Label("荒野",10,P.text,{ id="roadLevel" }),
-            Label("等级由部队踩踏累积，科技只决定上限。",9,P.muted,{ whiteSpace="normal",maxLines=3,width="100%" }),
-        } })
-    local techPage=UI.Panel { id="techPage",visible=false,gap=12,children=techButtons }
     local side=UI.Panel {
         width=self.narrow and 206 or 244,backgroundColor=P.panel,borderRightWidth=1,borderRightColor=P.line,
         padding=14,gap=12,children={
             UI.Panel { flexDirection="row",alignItems="center",justifyContent="space-between",children={
-                Label("营地规划",15,P.text,{ fontWeight="bold" }),Label("左侧可建",9,P.muted),
+                Label("营地规划",15,P.text,{ fontWeight="bold" }),
+                Label("兵力 "..C.armyLimit.." 上限",9,P.muted),
             } },
-            UI.Panel { flexDirection="row",flexWrap="wrap",gap=6,allowOverflow=true,children=toolButtons },
-            UI.Panel { flexDirection="row",gap=6,children={
-                Button("建筑",function() self:Tab("build") end,{ id="tab_build",width="48%",height=32 }),
-                Button("道路科技",function() self:Tab("tech") end,{ id="tab_tech",width="48%",height=32 }),
-            } },
-            UI.ScrollView { flexGrow=1,flexBasis=0,scrollY=true,showScrollbar=true,children={ buildPage,techPage } },
+            UI.Panel { flexDirection="row",gap=6,children=toolButtons },
+            UI.ScrollView { flexGrow=1,flexBasis=0,scrollY=true,showScrollbar=true,children={ buildPage } },
             UI.Panel { paddingTop=10,borderTopWidth=1,borderTopColor=P.line,gap=4,children={
                 Label("行军与踩踏",9,P.gold),
-                Label("部队自动行军；营地内按直线加横线的最短折线走向城门，走得越多越成路。",9,P.muted,{ whiteSpace="normal",maxLines=3,width="100%" }),
+                Label("部队自动行军；营地内按直线加横线的最短折线走向城门。道路不能铺设也不能拆除，全靠部队反复踩踏自然形成。",9,P.muted,{ whiteSpace="normal",maxLines=4,width="100%" }),
+                Label("当前主路",9,P.gold,{ marginTop=4 }),
+                Label("荒野",9,P.text,{ id="roadLevel" }),
             } },
         },
     }
@@ -196,8 +165,8 @@ function Interface:Create()
         side,UI.Panel { flexGrow=1,flexBasis=0,flexShrink=1,children={ phaseBar,mapLabels,self.battlefield,mapFooter } },
     } }
     local commands={}
-    local commandIcons={ collect="采",defend="守",attack="攻" }
-    for _,kind in ipairs({"collect","defend","attack"}) do
+    local commandIcons={ defend="守",attack="攻" }
+    for _,kind in ipairs({"defend","attack"}) do
         local k=kind
         table.insert(commands,Button(nil,function() sim:SetCommand(k) end,{
             id="command_"..kind,height=58,flexGrow=1,flexBasis=0,flexShrink=1,padding=10,children={
@@ -205,7 +174,7 @@ function Interface:Create()
                     Label(commandIcons[kind],18,P.gold,{ width=26,textAlign="center",fontWeight="bold" }),
                     UI.Panel { gap=4,flexGrow=1,flexShrink=1,children={
                         Label(C.commandNames[kind],12,P.text),
-                        Label(kind=="collect" and "分散采集，守备空虚" or kind=="defend" and "固守城门，警惕范围伤害" or "前压追击，警惕绕后",8,P.muted),
+                        Label(kind=="defend" and "固守城门，警惕范围伤害" or "前压追击，警惕绕后",8,P.muted),
                     } },
                 } },
             },
@@ -235,11 +204,11 @@ end
 
 function Interface:CreateHelp()
     local lines={
-        { "01 / 规划营地", "战场没有岩石，也没有铺设工具。你唯一能改变地形的手段，是用建筑占地去引导部队的走向。" },
-        { "02 / 道路自己长出来", "部队从营地走到城门会反复踩踏同一条路线。走得越多，荒野依次变成踩踏痕迹、土路、硬化路面、加速通道，移速越来越快。" },
-        { "03 / 发育与采集", "每轮发育90秒。民兵自动产出，在城外待命。发布收集资源后，部队自主寻找并清理资源点。" },
+        { "01 / 规划营地", "战场空旷无物，也没有拆除与铺设工具。建筑一旦落下就不可撤销，你唯一能改变地形的手段，是用建筑占地去引导部队的走向。" },
+        { "02 / 道路自己长出来", "部队从营地走到城门会反复踩踏同一条路线。走得越多，荒野依次变成踩踏痕迹、土路、硬化路面、加速通道，移速越来越快。道路完全自发形成，无法铺设也无法拆除。" },
+        { "03 / 兵力与产线", "我方同时存在的士兵上限为" .. C.armyLimit .. "。民兵营按周期产出民兵，盾牌工坊、弓箭作坊、马厩提供转职库存；产线越多，兵力补充越快。" },
         { "04 / 攻守取舍", "驻守城门不追击，但怕范围伤害；全力进攻主动前压，但后方空虚。每条指令消耗15资源，冷却8秒。" },
-        { "05 / 道路与巨兽", "击退波次或采集深处资源获得科技，科技决定踩踏能达到的最高等级。大象必须有2格宽的硬化路面；遇到窄路将卡滞并堵塞后队。" },
+        { "05 / 道路与巨兽", "击退波次获得资源补给。大象必须有2格宽的硬化路面才能通行；路面不够宽，大象会卡滞并堵塞后队。" },
         { "06 / 最终决战", "击退3轮普通波次后直接迎战Boss。击败破城巨兽即可通关；城墙生命为0则失败。" },
     }
     local items={ Label("指挥的是规则，不是士兵。",20,P.gold,{ fontWeight="bold" }),
@@ -248,7 +217,7 @@ function Interface:CreateHelp()
         table.insert(items,UI.Panel { gap=4,children={ Label(item[1],12,P.text,{fontWeight="bold"}),
             Label(item[2],10,P.muted,{whiteSpace="normal",maxLines=4,width="100%"}) } })
     end
-    table.insert(items,Label("浏览模式拖动地图 / 滚轮或A、D横移 / 空格暂停 / 1、2、3发布指令",9,P.muted,{whiteSpace="normal",maxLines=3,width="100%"}))
+    table.insert(items,Label("浏览模式拖动地图 / 滚轮或A、D横移 / 空格暂停 / 1、2发布指令",9,P.muted,{whiteSpace="normal",maxLines=3,width="100%"}))
     table.insert(items,Button("明白了，返回营地  →",function() self:Help(false) end,{width="100%",backgroundColor=P.gold,textColor=P.bg}))
     return UI.Panel { id="help",visible=false,position="absolute",left=0,top=0,right=0,bottom=0,
         backgroundColor={20,28,24,225},justifyContent="center",alignItems="center",children={
@@ -280,22 +249,12 @@ function Interface:Help(open)
     self:Update(1)
 end
 
-function Interface:Tab(tab)
-    self.tab=tab
-    local build=self.root:FindById("buildPage")
-    local tech=self.root:FindById("techPage")
-    if build then build:SetVisible(tab=="build") end
-    if tech then tech:SetVisible(tab=="tech") end
-    self:Update(1)
-end
-
 function Interface:Update(dt)
     self.timer=self.timer+dt
     if self.timer<0.15 then return end
     self.timer=0
     local sim=self.sim
     self:Text("gold",tostring(math.floor(sim.gold)))
-    self:Text("tech",tostring(sim.tech))
     self:Text("wall",math.ceil(sim.wallHp).." / "..C.wallHealth)
     local hp=self.root:FindById("wallbar") --[[@as ProgressBar?]]
     if hp then hp:SetValue(sim.wallHp/C.wallHealth) end
@@ -308,32 +267,21 @@ function Interface:Update(dt)
     if wb then wb:SetDisabled(sim.phase~="develop"); wb:SetText(sim.phase=="develop" and ("迎敌 +"..math.floor(sim.phaseTime*.65).."  →") or "敌军来袭") end
     self:Text("counts","部队 "..sim:ArmyCount().." · 转职 "..sim.converted.." · 击败 "..sim.kills)
     local info=C.buildings[self.tool]
-    self:Text("mapStatus",info and (info.name.." · "..info.description) or self.tool=="inspect" and ("浏览模式 · 拖动地图 / 滚轮横移 · 城门占用 "..sim.gateUsed.."/3") or "拆除模式 · 55%返还 · 道路由部队踩踏形成，无需铺设")
+    self:Text("mapStatus",info and (info.name.." · "..info.description) or ("浏览模式 · 拖动地图 / 滚轮横移 · 城门占用 "..sim.gateUsed.."/3"))
     local level=sim:RoadLevel()
-    self:Text("roadLevel",C.trailNames[level+1].."  ·  "..math.floor(sim.roadProgress*100).."% 通行段达标"..(level>=C.TrailCap(sim.techLevel) and "  · 已达科技上限" or ""))
+    self:Text("roadLevel",C.trailNames[level+1].."  ·  "..math.floor(sim.roadProgress*100).."% 通行段达标")
     self:Text("commandHint",sim.commandTimer>0 and ("   /   冷却 "..math.ceil(sim.commandTimer).." 秒 · "..C.commandNames[sim.command]) or ("   /   15资源 · 当前："..C.commandNames[sim.command]))
     self:Text("notice",sim.noticeTime>0 and sim.notice or (sim.blockedCount>0 and ("拥堵预警："..sim.blockedCount.."个单位受阻。拓宽主路、分散出口或调整工坊布局。") or "没有单兵微操：你能改的是营地布局、道路走向与全局指令。"))
-    for _,kind in ipairs({"collect","defend","attack"}) do
+    for _,kind in ipairs({"defend","attack"}) do
         local btn=self.root:FindById("command_"..kind) --[[@as Button?]]
         if btn then
             btn:SetDisabled(sim.commandTimer>0 or sim.gold<C.commandCost or sim.phase=="victory" or sim.phase=="defeat")
             btn:SetStyle({borderColor=sim.command==kind and P.gold or P.line,backgroundColor=sim.command==kind and {73,78,56,255} or P.card})
         end
     end
-    for _,kind in ipairs({"inspect","erase","barracks","shield","bow","stable","elephant","tower","block"}) do
+    for _,kind in ipairs({"inspect","barracks","shield","bow","stable","elephant","tower","block"}) do
         local btn=self.root:FindById("tool_"..kind) --[[@as Button?]]
         if btn then btn:SetStyle({borderColor=self.tool==kind and P.gold or P.line,backgroundColor=self.tool==kind and {75,81,58,255} or P.card}) end
-    end
-    for i=1,3 do
-        local btn=self.root:FindById("tech_"..i) --[[@as Button?]]
-        if btn then
-            btn:SetText(sim.techLevel>=i and "已研发  ✓" or ("研发 · "..C.techCosts[i].."科技"))
-            btn:SetDisabled(sim.techLevel>=i or sim.techLevel+1~=i or sim.tech<C.techCosts[i])
-        end
-    end
-    for _,tab in ipairs({"build","tech"}) do
-        local b=self.root:FindById("tab_"..tab)
-        if b then b:SetStyle({backgroundColor=self.tab==tab and {75,81,58,255} or P.card,borderColor=self.tab==tab and P.gold or P.line}) end
     end
     local pause=self.root:FindById("pause") --[[@as Button?]]
     if pause then pause:SetText(sim.paused and "▶ 继续" or "Ⅱ 暂停") end
@@ -342,6 +290,6 @@ function Interface:Update(dt)
     local ending=self.root:FindById("end")
     if ending then ending:SetVisible(sim.phase=="victory" or sim.phase=="defeat") end
     self:Text("endTitle",sim.phase=="victory" and "边境守住了" or "城墙已失守")
-    self:Text("endStats","击败 "..sim.kills.." · 转职 "..sim.converted.." · 采集 "..sim.collected)
+    self:Text("endStats","击败 "..sim.kills.." · 转职 "..sim.converted.." · 产出 "..sim.produced)
 end
 return Interface

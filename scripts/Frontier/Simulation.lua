@@ -21,8 +21,6 @@ local Grid = require "Frontier.Grid"
 ---@field state string
 ---@field upgraded boolean
 ---@field returning boolean
----@field resourceId number
----@field harvest number
 ---@field commandVersion number
 ---@field passedGate boolean
 ---@field ticket number
@@ -31,20 +29,9 @@ local Grid = require "Frontier.Grid"
 ---@field facing number
 ---@field moving boolean
 ---@field flash number
----@field neutral boolean
 ---@field active boolean
 ---@field homeX number
 ---@field homeY number
-
----@class FrontierResource
----@field id number
----@field x number
----@field y number
----@field gold number
----@field tech number
----@field remaining number
----@field initial number
----@field tier number
 
 ---@class FrontierShot
 ---@field x number
@@ -67,12 +54,9 @@ local Grid = require "Frontier.Grid"
 ---@class FrontierSim
 ---@field grid FrontierGrid
 ---@field units FrontierUnit[]
----@field resources FrontierResource[]
 ---@field shots FrontierShot[]
 ---@field effects FrontierEffect[]
 ---@field gold number
----@field tech number
----@field techLevel number
 ---@field wallHp number
 ---@field phase string
 ---@field phaseTime number
@@ -88,7 +72,6 @@ local Grid = require "Frontier.Grid"
 ---@field nextUnit number
 ---@field nextTicket number
 ---@field kills number
----@field collected number
 ---@field converted number
 ---@field produced number
 ---@field notice string
@@ -114,11 +97,9 @@ end
 function Sim:Init()
     self.grid = Grid.New()
     self.units = {} ---@type FrontierUnit[]
-    self.resources = {} ---@type FrontierResource[]
     self.shots = {} ---@type FrontierShot[]
     self.effects = {} ---@type FrontierEffect[]
-    self.gold, self.tech, self.techLevel = C.startGold, 0, 0
-    self.grid.techLevel = 0
+    self.gold = C.startGold
     self.wallHp = C.wallHealth
     self.phase, self.phaseTime, self.wave = "develop", C.developTime, 1
     self.waveQueue = {} ---@type string[]
@@ -126,13 +107,12 @@ function Sim:Init()
     self.command, self.commandTimer, self.commandVersion = "wait", 0, 1
     self.time, self.paused, self.speed = 0, false, 1
     self.nextUnit, self.nextTicket = 1, 1
-    self.kills, self.collected, self.converted, self.produced = 0, 0, 0, 0
+    self.kills, self.converted, self.produced = 0, 0, 0
     self.notice = "首座民兵营已就绪。让部队在营地与城门之间反复行军，道路会自己长出来。"
     self.noticeTime, self.gateUsed, self.blockedCount, self.revision = 8, 0, 0, 1
     self.diagnosticTimer, self.bossSeen = 0, false
     self.roadTimer, self.roadProgress, self.roadLevelValue = 0, 0, 0
-    self:RefreshResources()
-    print("[游戏] 单机初始化，90秒发育，3波普通敌军后直接进入Boss战")
+    print("[游戏] 单机初始化，90秒发育，3波普通敌军后直接进入Boss战；兵力上限" .. C.armyLimit)
 end
 
 function Sim:Notify(text)
@@ -142,7 +122,7 @@ function Sim:Notify(text)
 end
 
 function Sim:Active(u)
-    return u.active and u.hp > 0 and (not u.neutral or self.phase == "develop")
+    return u.active and u.hp > 0
 end
 
 function Sim:ArmyCount()
@@ -157,37 +137,19 @@ function Sim:EnemyCount()
     return n
 end
 
-function Sim:AddUnit(kind, team, x, y, neutral)
+function Sim:AddUnit(kind, team, x, y)
     local t = C.units[kind]
     local u = { id = self.nextUnit, kind = kind, team = team, x = x, y = y,
         hp = t.hp, maxHp = t.hp, armor = t.armor, size = t.size, cooldown = 0,
         path = {}, pathVersion = 0, goalX = -1, goalY = -1, repath = 0, blocked = 0,
-        state = "行军", upgraded = kind ~= "militia", returning = false, resourceId = 0,
-        harvest = 0, commandVersion = 0, passedGate = team ~= "ally", ticket = 0,
+        state = "行军", upgraded = kind ~= "militia", returning = false,
+        commandVersion = 0, passedGate = team ~= "ally", ticket = 0,
         gateLane = 0, gateSlots = 0, facing = team == "ally" and 1 or -1,
-        moving = false, flash = 0, neutral = neutral or false, active = true,
+        moving = false, flash = 0, active = true,
         homeX = x, homeY = y }
     self.nextUnit = self.nextUnit + 1
     table.insert(self.units, u)
     return u
-end
-
-function Sim:RefreshResources()
-    for i = #self.units, 1, -1 do if self.units[i].neutral then table.remove(self.units, i) end end
-    self.resources = {}
-    -- 分布固定、产量部分刷新；采集顺序和归属由距离、视野、竞争决定。
-    local locations = { { 23, 3 }, { 27, 9 }, { 32, 5 }, { 38, 9 } }
-    for i, p in ipairs(locations) do
-        local amount = math.min(4, self.wave + 1)
-        table.insert(self.resources, { id = i, x = p[1], y = p[2], tier = i,
-            gold = 14 + i * 8, tech = i >= 3 and 1 or 0, remaining = amount, initial = amount })
-        for j = 1, math.min(i, 3) do
-            local guard = self:AddUnit("guardian", "enemy", p[1] + j * 0.8, p[2] + (j % 2) * 0.85, true)
-            guard.hp = 20 + i * 8
-            guard.maxHp = guard.hp
-        end
-    end
-    print("[资源] 中立点刷新，深处守卫更强；第" .. self.wave .. "轮")
 end
 
 function Sim:Perform(tool, x, y)
@@ -196,7 +158,6 @@ function Sim:Perform(tool, x, y)
     if def then
         local ok, reason = self.grid:CanPlace(tool, x, y)
         if not ok then self:Notify(reason); return false end
-        if def.tech and self.techLevel < def.tech then self:Notify("先研发硬化路面，才能建造大象驯养栏"); return false end
         if self.gold < def.cost then self:Notify("基础资源不足"); return false end
         -- 不能覆盖单位，避免单位被建筑夹在不可通行格内。
         for _, u in ipairs(self.units) do
@@ -210,23 +171,7 @@ function Sim:Perform(tool, x, y)
         self:Notify(def.name .. "建造完成；路径已重新计算")
         return true
     end
-    local ok, text, price = self.grid:Edit(tool, x, y)
-    if not ok then self:Notify(text); return false end
-    self.gold = self.gold - price
-    self.notice, self.noticeTime = text, 2
-    self.revision = self.revision + 1
-    return true
-end
-
-function Sim:Upgrade()
-    local nextLevel = self.techLevel + 1
-    if nextLevel > 3 then self:Notify("道路科技已全部解锁"); return end
-    if self.tech < C.techCosts[nextLevel] then self:Notify("科技资源不足：采集中立深区或击退波次"); return end
-    self.tech = self.tech - C.techCosts[nextLevel]
-    self.techLevel = nextLevel
-    self.grid.techLevel = nextLevel
-    self.grid.version = self.grid.version + 1
-    self:Notify("研发完成：" .. C.techNames[nextLevel])
+    return false
 end
 
 function Sim:SetCommand(command)
@@ -251,33 +196,29 @@ function Sim:StartWave(early)
     for i = 1, 8 + self.wave * 5 do
         local kind = "raider"
         if i % 5 == 0 then kind = "brute"
-        elseif i % 4 == 0 then kind = "shooter"
-        elseif self.wave >= 2 and i % 6 == 0 then kind = "flanker" end
+        elseif i % 4 == 0 then kind = "shooter" end
         table.insert(self.waveQueue, kind)
     end
     self.commandVersion = self.commandVersion + 1
-    for _, u in ipairs(self.units) do if u.neutral then u.active = false end end
     self.revision = self.revision + 1
     print("[波次] 普通波次 " .. self.wave .. "，敌军总量 " .. #self.waveQueue)
 end
 
 function Sim:StartBoss()
     self.phase, self.phaseTime, self.wave, self.spawnTimer = "boss", 0, 4, 0.1
-    self.waveQueue = { "boss", "brute", "shooter", "brute", "flanker", "shooter" }
+    self.waveQueue = { "boss", "brute", "shooter", "brute", "shooter", "brute" }
     self.bossSeen = false
     self:Notify("最终决战：破城巨兽。分散部队，避免城门密集受击。")
 end
 
 function Sim:WaveComplete()
     self.gold = self.gold + 100 + self.wave * 30
-    self.tech = self.tech + 2
-    self:Notify("第 " .. self.wave .. " 波击退！获得基础资源与2科技")
+    self:Notify("第 " .. self.wave .. " 波击退！获得基础资源补给")
     if self.wave == 3 then self:StartBoss(); return end
     self.wave = self.wave + 1
     self.phase, self.phaseTime = "develop", C.developTime
     self.command, self.commandTimer = "wait", 0
     self.commandVersion = self.commandVersion + 1
-    self:RefreshResources()
 end
 
 function Sim:Effect(x, y, kind, color, radius)
@@ -298,10 +239,7 @@ function Sim:Damage(target, amount)
     if target.hp <= 0 then
         self:Effect(target.x, target.y, "death", C.units[target.kind].color, target.size * 0.5)
         target.active = false
-        if target.team == "enemy" then
-            self.kills = self.kills + 1
-            if target.neutral then self.gold = self.gold + 5 end
-        end
+        if target.team == "enemy" then self.kills = self.kills + 1 end
         if target.kind == "boss" then
             self.phase = "victory"
             self:Notify("破城巨兽已倒下，边境守住了！")
@@ -341,13 +279,9 @@ function Sim:Target(u)
             local visible = dist <= t.sight
             -- 城墙实体阻断穿墙接战；在门外才允许攻守交互。
             if u.x < C.wallCol - 0.5 or v.x < C.wallCol - 0.5 then visible = false end
-            if u.neutral and (v.x - u.homeX)^2 + (v.y - u.homeY)^2 > 4.5^2 then visible = false end
             if u.team == "ally" and (self.command == "defend" or self.command == "wait" or u.returning) then
                 if v.x > C.wallCol + 4.2 and dist > t.range then visible = false end
-                -- 警戒视野不是追击命令；远处资源守卫不能把待命部队冻在出口。
-                if v.neutral and dist > t.range + 0.7 then visible = false end
             end
-            if u.kind == "flanker" and u.x > C.wallCol + 3 and v.x > C.wallCol + 3 then visible = dist < 1.8 end
             if visible then
                 local score = dist
                 if u.kind == "cavalry" and C.units[v.kind].ranged then score = score - 2.5 end
@@ -372,12 +306,12 @@ end
 -- 城门：3行可通行位；按票据先到先得，普通占1、大象占2，不可超配。
 function Sim:CollisionRadius(u, x, y)
     if u.size == 2 then return 0.87 end
-    -- 拓宽只提升道路上的通行密度：踩踏达到土路及以上才生效。
-    if self.techLevel >= 2 and self.grid:TrailLevel(x, y) >= 2 then return 0.24 end
     return 0.36
 end
 
-function Sim:PositionClear(u, x, y, relaxed)
+-- passAllies：长时间僵持时的解结通道，允许穿过同阵营单位。
+-- 没有它，密集队形会卡在"恰好等于碰撞间距"的晶格上，谁也无法挪动半步。
+function Sim:PositionClear(u, x, y, relaxed, passAllies)
     local radius = self:CollisionRadius(u, x, y)
     local minX, maxX = math.floor(x - radius + 0.5), math.floor(x + radius + 0.5)
     local minY, maxY = math.floor(y - radius + 0.5), math.floor(y + radius + 0.5)
@@ -390,7 +324,10 @@ function Sim:PositionClear(u, x, y, relaxed)
         if other ~= u and self:Active(other) then
             local r = self:CollisionRadius(other, other.x, other.y)
             if math.abs(x - other.x) < radius + r and math.abs(y - other.y) < radius + r then
-                if not relaxed or other.team == u.team then return false end
+                local friendly = other.team == u.team
+                if not (passAllies and friendly) then
+                    if not relaxed or friendly then return false end
+                end
             end
         end
     end
@@ -432,7 +369,7 @@ function Sim:GateStep()
                 -- 票据绑定可达门行，阻碍墙或岩石不得让空闲上行吞掉整个队列。
                 free = self.grid:Path(sx, sy, C.wallCol - 1, row, u.size, strict) ~= nil
                     and self.grid:Footprint(C.wallCol, row, u.size)
-                if strict then free = free and self.grid:LargeRoad(C.wallCol - 1, row, self.techLevel) end
+                if strict then free = free and self.grid:LargeRoad(C.wallCol - 1, row) end
             end
             if free then found = lane; break end
         end
@@ -469,7 +406,7 @@ function Sim:Move(u, tx, ty, dt)
         return
     end
     if u.team == "ally" and u.size == 2 and u.x <= C.wallCol then
-        if not self.grid:LargeRoad(sx, sy, self.techLevel) then
+        if not self.grid:LargeRoad(sx, sy) then
             u.state, u.blocked = "窄路卡滞", u.blocked + dt
             return
         end
@@ -496,14 +433,16 @@ function Sim:Move(u, tx, ty, dt)
     end
     if #u.path == 0 and (sx ~= gx or sy ~= gy) then u.state = "路径阻断"; u.blocked = u.blocked + dt; return end
     if u.team == "ally" and u.size == 2 and nx <= C.wallCol
-        and not self.grid:LargeRoad(math.floor(nx - offset + 0.5), math.floor(ny - offset + 0.5), self.techLevel) then
+        and not self.grid:LargeRoad(math.floor(nx - offset + 0.5), math.floor(ny - offset + 0.5)) then
         u.state, u.blocked = "窄路卡滞", u.blocked + dt
         return
     end
     local speed = t.speed * C.trailSpeed[self.grid:TrailLevel(u.x, u.y) + 1]
     local step = math.min(dist, speed * dt)
     local px, py = u.x + dx / dist * step, u.y + dy / dist * step
-    if self:PositionClear(u, px, py) then
+    -- 僵持过久就允许穿过同阵营单位，避免密集队形锁死在碰撞晶格上。
+    local stuck = u.blocked > 2.5
+    if self:PositionClear(u, px, py) or (stuck and self:PositionClear(u, px, py, false, true)) then
         u.x, u.y, u.blocked, u.moving = px, py, 0, true
         if math.abs(dx) > 0.1 then u.facing = dx > 0 and 1 or -1 end
         -- 己方部队的踩踏把荒野逐渐压成道路；敌军不留下痕迹。
@@ -541,6 +480,8 @@ end
 
 function Sim:UpgradeUnit(u)
     if u.upgraded or u.team ~= "ally" then return end
+    -- 兵力已满时不再转职，否则一个单位会原地变成两个人。
+    if self:ArmyCount() >= C.armyLimit then return end
     for _, b in ipairs(self.grid.buildings) do
         local def = C.buildings[b.kind]
         if def.upgrade and b.stock > 0 then
@@ -559,23 +500,28 @@ function Sim:UpgradeUnit(u)
     end
 end
 
-function Sim:ChooseResource(u)
-    local best = nil ---@type FrontierResource?
-    local score = math.huge
-    for _, r in ipairs(self.resources) do
-        if r.remaining > 0 then
-            local dist = math.sqrt((r.x-u.x)^2 + (r.y-u.y)^2)
-            local nearby = 0
-            -- 只观察视野内同伴的目标，无全局分配器、无预占库存。
-            for _, v in ipairs(self.units) do
-                if self:Active(v) and v.team == "ally" and v ~= u and v.resourceId == r.id
-                    and (v.x-u.x)^2+(v.y-u.y)^2 <= C.units[u.kind].sight^2 then nearby = nearby + 1 end
-            end
-            local s = dist + nearby * 3.2 - r.tier * 0.2
-            if s < score then best, score = r, s end
+-- 敌军从右侧入场。出生点必须避开现有单位：两个单位叠在同一格会互相判定碰撞，
+-- 之后谁也无法移动，整波敌军就此僵在边缘（兵力上限调低后尤其致命）。
+function Sim:SpawnEnemy(kind)
+    local t = C.units[kind]
+    local size = t.size
+    local offset = (size - 1) * 0.5
+    local baseY = kind == "boss" and 6 or math.random(2, C.rows - 1)
+    local baseX = C.cols - size + 1
+    local probe = { size = size } --[[@as FrontierUnit]]
+    -- 以理想行号为中心向两侧扩散，找到第一个不重叠的落点。
+    local order = {}
+    for d = 0, C.rows do
+        if baseY - d >= 1 then table.insert(order, baseY - d) end
+        if d > 0 and baseY + d <= C.rows - size + 1 then table.insert(order, baseY + d) end
+    end
+    for _, cy in ipairs(order) do
+        local cx = math.max(1, math.min(C.cols - size + 1, baseX))
+        if self:PositionClear(probe, cx + offset, cy + offset) then
+            return self:AddUnit(kind, "enemy", cx + offset, cy + offset)
         end
     end
-    return best
+    return nil
 end
 
 -- 出兵点分散：优先选离已有同伴最远的候选格，避免新兵和旧部队叠在出口。
@@ -600,7 +546,7 @@ end
 
 function Sim:ApplyCommand(u)
     if u.commandVersion == self.commandVersion then return end
-    u.returning, u.resourceId, u.harvest = false, 0, 0
+    u.returning = false
     u.commandVersion = self.commandVersion
     u.path, u.repath = {}, 0
 end
@@ -620,31 +566,6 @@ function Sim:AllyGoal(u, dt)
         return
     end
     self:ApplyCommand(u)
-    if self.command == "collect" and self.phase == "develop" and not u.returning then
-        local resource = nil ---@type FrontierResource?
-        for _, r in ipairs(self.resources) do if r.id == u.resourceId and r.remaining > 0 then resource = r end end
-        if not resource then
-            resource = self:ChooseResource(u)
-            u.resourceId = resource and resource.id or 0
-        end
-        if resource then
-            u.state = "自主采集"
-            local distance = math.sqrt((resource.x-u.x)^2+(resource.y-u.y)^2)
-            if distance < 1.2 then
-                u.harvest = u.harvest + dt
-                if u.harvest >= 1.7 and resource.remaining > 0 then
-                    resource.remaining = resource.remaining - 1
-                    self.gold, self.tech = self.gold + resource.gold, self.tech + resource.tech
-                    self.collected = self.collected + resource.gold
-                    self:Effect(u.x, u.y, "harvest", { 238, 202, 125 }, 0.6)
-                    u.returning, u.resourceId, u.harvest = true, 0, 0
-                    print("[采集] 单位" .. u.id .. "先到先得，资源点" .. resource.id .. "剩余" .. resource.remaining)
-                end
-            else self:Move(u, resource.x, resource.y, dt) end
-            return
-        end
-        u.returning = true
-    end
     if self.command == "attack" then
         u.state = "向右推进"
         self:Move(u, C.cols - 1, u.y, dt)
@@ -653,7 +574,7 @@ function Sim:AllyGoal(u, dt)
         local x = C.wallCol + 2.8
         local y = math.max(2 + u.size * 0.5, math.min(C.rows - 1 - u.size * 0.5, u.y))
         if u.kind == "cavalry" and self.command == "defend" then y = 6 + math.sin(self.time * 0.65 + u.id) * 2 end
-        u.state = u.returning and "返回城门" or self.command == "defend" and "固守防线" or "城外待命"
+        u.state = self.command == "defend" and "固守防线" or "城外待命"
         if math.abs(u.x - x) > 0.4 or math.abs(u.y-y) > 0.5 then self:Move(u, x, y, dt) end
     end
 end
@@ -681,8 +602,7 @@ function Sim:Combat(u, target, dt)
             if target.x > C.wallCol + 4.2 then return end
         end
         if u.kind == "heavy" and dist > 2.6 then
-            if self.command == "attack" then self:Move(u, u.x + 0.8, u.y, dt)
-            elseif self.command == "collect" and self.phase == "develop" and not u.returning then self:AllyGoal(u, dt) end
+            if self.command == "attack" then self:Move(u, u.x + 0.8, u.y, dt) end
             return
         end
         self:Move(u, target.x, target.y, dt)
@@ -691,11 +611,6 @@ end
 
 function Sim:EnemyGoal(u, dt)
     if self.phase == "victory" or self.phase == "defeat" then return end
-    if u.neutral then
-        u.state = "守卫资源"
-        if (u.x-u.homeX)^2+(u.y-u.homeY)^2 > 0.5 then self:Move(u, u.homeX, u.homeY, dt) end
-        return
-    end
     local t = C.units[u.kind]
     local desiredX = C.wallCol + 0.8 + (u.size - 1) * 0.5
     if u.x <= desiredX + t.range * 0.2 then
@@ -722,7 +637,10 @@ function Sim:Production(dt)
             b.timer = math.min(def.interval, b.timer + dt)
             if b.timer >= def.interval then
                 if def.upgrade then
-                    if b.stock < 5 then b.stock, b.timer = b.stock + 1, 0 end
+                    -- 库存只是"待转职名额"，同样受兵力上限约束，避免攒出用不掉的库存。
+                    if b.stock < 5 and self:ArmyCount() + b.stock < C.armyLimit then
+                        b.stock, b.timer = b.stock + 1, 0
+                    end
                 elseif def.unit and self:ArmyCount() < C.armyLimit then
                     local size = C.units[def.unit].size
                     local spot = self:PickSpawn(self.grid:SpawnSpot(b, size), size)
@@ -794,12 +712,15 @@ function Sim:Step(dt)
     elseif self.phase == "battle" or self.phase == "boss" then
         self.spawnTimer = self.spawnTimer - dt
         if self.spawnTimer <= 0 and #self.waveQueue > 0 then
-            local kind = table.remove(self.waveQueue, 1)
-            local y = kind == "boss" and 6 or math.random(2, C.rows - 1)
-            if kind == "flanker" then y = math.random() < 0.5 and 2 or C.rows - 1 end
-            self:AddUnit(kind, "enemy", C.cols - (C.units[kind].size - 1) * 0.5, y)
-            if kind == "boss" then self.bossSeen = true end
-            self.spawnTimer = self.phase == "boss" and 1.3 or math.max(0.6, 1.5 - self.wave * 0.15)
+            local kind = self.waveQueue[1]
+            if self:SpawnEnemy(kind) then
+                table.remove(self.waveQueue, 1)
+                if kind == "boss" then self.bossSeen = true end
+                self.spawnTimer = self.phase == "boss" and 1.3 or math.max(0.6, 1.5 - self.wave * 0.15)
+            else
+                -- 右侧暂时没有空位：稍后再试，不要把敌人丢在重叠坐标上。
+                self.spawnTimer = 0.4
+            end
         end
         if #self.waveQueue == 0 and self:EnemyCount() == 0 and self.phase == "battle" then self:WaveComplete() end
     end

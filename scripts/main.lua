@@ -25,7 +25,7 @@ function Start()
     hud = Interface.New(sim)
     SubscribeToEvent("Update", "HandleFrontierUpdate")
     SubscribeToEvent("KeyDown", "HandleFrontierKey")
-    print("[启动] 边境工事已就绪：网格规划、有限库存转职、AI自主战斗")
+    print("[启动] 边境工事已就绪：网格规划、兵力上限5、有限库存转职、道路自发生成")
 end
 
 function Stop()
@@ -60,9 +60,8 @@ function HandleFrontierKey(eventType, eventData)
     if not sim or not hud then return end
     local key=eventData:GetInt("Key")
     if key==KEY_SPACE then sim.paused=not sim.paused
-    elseif key==KEY_1 then sim:SetCommand("collect")
-    elseif key==KEY_2 then sim:SetCommand("defend")
-    elseif key==KEY_3 then sim:SetCommand("attack")
+    elseif key==KEY_1 then sim:SetCommand("defend")
+    elseif key==KEY_2 then sim:SetCommand("attack")
     elseif key==KEY_ESCAPE then hud:Select("inspect")
     elseif key==KEY_H then hud:Help(not hud.helpOpen) end
 end

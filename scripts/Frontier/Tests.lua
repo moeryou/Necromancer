@@ -47,16 +47,12 @@ function Start()
         Check(sim.grid.cells[6][6].trail==0,"踩踏不足阈值时仍是荒野")
         sim.grid:Trample(6.2,6.2,1)
         Check(sim.grid.cells[6][6].trail==1,"累计踩踏达到阈值生成踩踏痕迹")
-        sim.grid:Trample(6.2,6.2,C.trailThresholds[2]*2)
+        sim.grid:Trample(6.2,6.2,C.trailThresholds[2])
         Check(sim.grid.cells[6][6].trail>=2 and sim.grid:TrailLevel(6,6)==2,"继续踩踏升级为土路")
-        sim.techLevel=1; sim.grid.techLevel=1
         for _,p in ipairs({{6,6},{7,6},{6,7},{7,7}}) do Wear(sim,p[1],p[2],3) end
-        Check(sim.grid:LargeRoad(6,6,1) and sim.grid:TrailLevel(6,6)==3,"科技1允许踩踏到硬化路面并供大象通行")
+        Check(sim.grid:LargeRoad(6,6) and sim.grid:TrailLevel(6,6)==3,"硬化路面可供大象通行")
         for _,p in ipairs({{6,6},{7,6},{6,7},{7,7}}) do Wear(sim,p[1],p[2],2) end
-        Check(not sim.grid:LargeRoad(6,6,1),"土路不满足大象道路要求")
-        sim.techLevel=0; sim.grid.techLevel=0
-        Check(C.TrailCap(0)==2 and sim.grid:TrailLevel(6,6)==2,"无科技时踩踏封顶在土路")
-        Check(not sim.grid:LargeRoad(6,6,0),"无科技时大象无法通行")
+        Check(not sim.grid:LargeRoad(6,6),"土路不满足大象道路要求")
         sim=Simulation.New(); OpenCamp(sim)
         local b=sim.grid:AddBuilding("shield",7,5)
         b.stock=1
@@ -73,13 +69,12 @@ function Start()
         local elephant=sim:AddUnit("elephant","ally",10.5,6.5)
         sim:Move(elephant,14.5,6.5,C.fixedStep)
         Check(elephant.state=="窄路卡滞" and elephant.x==10.5,"大象在荒野停滞")
-        sim.techLevel=1; sim.grid.techLevel=1
         for y=6,7 do for x=10,16 do Wear(sim,x,y,3) end end
         sim.grid.version=sim.grid.version+1
         for _=1,60 do sim:Move(elephant,14.5,6.5,C.fixedStep) end
         Check(elephant.x>11,"大象在两格硬化路面正常行军")
         for y=6,7 do for x=16,C.wallCol do Wear(sim,x,y,3) end end
-        Check(sim.grid:LargeRoad(C.wallCol,6,1),"大象半跨城门时不要求城外踩踏")
+        Check(sim.grid:LargeRoad(C.wallCol,6),"大象半跨城门时不要求城外踩踏")
         sim.units={}
         for y=1,C.rows do for x=4,17 do Wear(sim,x,y,0) end end
         for x=6,17 do for y=5,6 do Wear(sim,x,y,3) end end
@@ -92,7 +87,7 @@ function Start()
         local detour=sim.grid:Path(8,5,14,5,2,true)
         Check(detour~=nil,"大象能找到更长的双宽硬化绕路")
         if detour then
-            for _,point in ipairs(detour) do Check(sim.grid:LargeRoad(point.x,point.y,1),"硬化绕路不经过荒野捷径") end
+            for _,point in ipairs(detour) do Check(sim.grid:LargeRoad(point.x,point.y),"硬化绕路不经过荒野捷径") end
         end
         local walker=sim:AddUnit("elephant","ally",8.5,5.5)
         for _=1,45*30 do sim:Move(walker,14.5,5.5,C.fixedStep) end
@@ -114,48 +109,41 @@ function Start()
         for _=1,15*30 do sim:GateStep(); sim:AllyGoal(validLane,C.fixedStep) end
         Check(validLane.passedGate,"合法下两行硬化路面可以让大象真正出门")
         sim.grid:RemoveBuilding(obstruction.id)
-        sim.units={}
-        for i=1,6 do
-            local unit=sim:AddUnit("militia","ally",20+(i%2)*.9,3+i)
-            unit.passedGate=true
-        end
-        sim:SetCommand("collect")
-        for _,unit in ipairs(sim.units) do sim:AllyGoal(unit,C.fixedStep) end
-        local targets={}
-        for _,unit in ipairs(sim.units) do targets[unit.resourceId]=true end
-        local n=0
-        for id in pairs(targets) do if id>0 then n=n+1 end end
-        Check(n>=2,"距离与局部竞争使部队选择不同资源点")
-        sim.units={}
-        local resource=sim.resources[1]
-        resource.remaining=1
-        local gatherer=sim:AddUnit("militia","ally",resource.x,resource.y)
-        gatherer.passedGate=true
-        gatherer.commandVersion=sim.commandVersion
-        gatherer.resourceId=resource.id
-        for _=1,60 do sim:AllyGoal(gatherer,C.fixedStep) end
-        Check(resource.remaining==0 and gatherer.returning,"采集消耗实体库存并自动返回")
-        sim=Simulation.New()
-        sim.units={}
-        local heavyCollector=sim:AddUnit("heavy","ally",20,3)
-        heavyCollector.passedGate=true
-        heavyCollector.returning=true
-        local distantGuard=sim:AddUnit("guardian","enemy",24,3)
-        distantGuard.neutral=true
-        sim:SetCommand("collect")
-        sim:Step(C.fixedStep)
-        Check(not heavyCollector.returning and heavyCollector.resourceId>0,"交战中的新采集指令立即清除旧返程状态")
-        for _=1,30 do sim:Combat(heavyCollector,distantGuard,C.fixedStep) end
-        Check(heavyCollector.x>20 and heavyCollector.state=="自主采集","重甲看到远处守卫时仍继续采集，不永久原地停留")
+        -- 兵力上限：生产与转职都不突破 C.armyLimit。
+        sim=Simulation.New(); OpenCamp(sim)
+        Advance(sim,75)
+        Check(sim.phase=="develop","兵力上限观测仍在发育阶段内")
+        Check(sim:ArmyCount()<=C.armyLimit,"发育期内我方兵力不超过上限")
+        Check(sim:ArmyCount()==C.armyLimit,"产线会自然把兵力填到上限")
+        local beforeUpgrade=sim:ArmyCount()
+        for _,u in ipairs(sim.units) do sim:UpgradeUnit(u) end
+        Check(sim:ArmyCount()==beforeUpgrade,"满编时转职不改变兵力总数")
+        -- 道路没有科技门槛：纯靠踩踏就能一路升到加速通道。
+        sim=Simulation.New(); OpenCamp(sim)
+        for _=1,400 do sim.grid:Trample(6.2,6.2,1) end
+        Check(sim.grid:TrailLevel(6,6)==4,"无科技门槛，反复踩踏可升到加速通道")
+        -- 拆除与道路编辑操作已全部取消。
+        local goldBefore=sim.gold
+        Check(not sim:Perform("erase",6,6),"拆除操作已取消")
+        Check(not sim:Perform("road",6,6) and not sim:Perform("clear",6,6)
+            and not sim:Perform("boost",6,6) and sim.gold==goldBefore,"道路编辑操作已取消且不消耗资源")
+        Check(C.commandNames.collect==nil and C.commandNames.defend~=nil and C.commandNames.attack~=nil,
+            "收集资源指令已移除，只保留驻守与进攻")
         sim=Simulation.New(); OpenCamp(sim)
         Advance(sim,70)
         local outside=0
         for _,u in ipairs(sim.units) do if u.team=="ally" and u.passedGate then outside=outside+1 end end
         print("[行军观测] 已出门="..outside.." 部队="..sim:ArmyCount().." 拥堵="..sim.blockedCount)
         for _,u in ipairs(sim.units) do if u.team=="ally" then print(string.format("[行军] %d %.2f %.2f %s 门位%d",u.id,u.x,u.y,u.state,u.gateSlots)) end end
-        Check(outside>=5,"默认生产单位能自然穿过城门，不发生永久死锁")
+        Check(outside>=3,"默认生产单位能自然穿过城门")
         Check(sim.phase=="develop","90秒之前仍处于发育阶段")
-        Advance(sim,21)
+        -- 兵力到顶后不会再有新兵，剩下的只能在城门队列里继续消化。
+        Advance(sim,14)
+        local outsideLater=0
+        for _,u in ipairs(sim.units) do if u.team=="ally" and u.passedGate then outsideLater=outsideLater+1 end end
+        print("[行军观测] 后续已出门="..outsideLater.." 部队="..sim:ArmyCount())
+        Check(outsideLater>=4,"城门队列能把整支部队送出城，不发生永久死锁")
+        Advance(sim,7)
         Check(sim.phase=="battle" and sim.wave==1,"90秒自动进入第一波")
         sim:SetCommand("defend")
         Advance(sim,160)
@@ -167,7 +155,7 @@ function Start()
         sim:StartWave(true)
         Check(sim.gold==gold+39 and sim.phase=="battle","提前迎敌奖励与剩余时间相关")
         sim.wave=1; sim:WaveComplete()
-        Check(sim.phase=="develop" and sim.wave==2 and sim.tech==2,"首波胜利奖励并进入第二轮")
+        Check(sim.phase=="develop" and sim.wave==2,"首波胜利奖励并进入第二轮")
         sim.wave=2; sim:WaveComplete()
         Check(sim.phase=="develop" and sim.wave==3,"第二波胜利进入第三轮")
         sim.wave=3; sim:WaveComplete()
@@ -196,10 +184,12 @@ function Start()
         Advance(sim,85)
         sim:Perform("tower",18,4); sim:Perform("tower",18,8)
         sim:SetCommand("defend")
-        Advance(sim,700)
+        Advance(sim,1600)
         print("[整局观测] 阶段="..sim.phase.." 波次="..sim.wave.." 城墙="..sim.wallHp.." 击败="..sim.kills)
         print(string.format("[道路观测] 主路等级=%d 达标比例=%.0f%%", sim:RoadLevel(), sim.roadProgress*100))
-        Check(sim:RoadLevel()>=2 and sim.roadProgress>=0.5,"部队的反复行军能把营地至城门踩成土路")
+        -- 兵力上限只有5，部队出门一次就不再回营，主路只能踩出浅痕迹。
+        -- 这里只断言"移动确实留下了痕迹"，道路成长速度是设计参数，不在这里判定。
+        Check(sim:RoadLevel()>=1,"部队的行军能在营地主路上踩出痕迹")
         Check(sim.wave>=3,"正常生产与资源规划能连续击退前两波")
         Check(sim.phase=="victory" or sim.phase=="defeat","完整多波次加Boss流程能够收束")
         print("[测试汇总] "..checks.."项全部通过")

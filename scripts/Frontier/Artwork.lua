@@ -454,23 +454,4 @@ function Art.Unit(vg, u, x, y, s, time)
     end
 end
 
--- 资源箱：木箱 + 金色包边。
-function Art.Resource(vg, r, x, y, s, time)
-    local p = Art.palette
-    if r.remaining <= 0 then return end
-    Art.Ellipse(vg, x, y + s * .22, s * .44, s * .16, { 34, 46, 30, 80 })
-    Art.Rect(vg, x - s * .32, y - s * .18, s * .64, s * .40, p.wood, s * .08, p.outline, s * .06)
-    Art.Rect(vg, x - s * .36, y - s * .24, s * .72, s * .16, p.gold, s * .06, p.outline, s * .06)
-    Art.Line(vg, x - s * .17, y - s * .20, x - s * .17, y + s * .20, { 246, 222, 158, 255 }, s * .07)
-    Art.Line(vg, x + s * .17, y - s * .20, x + s * .17, y + s * .20, { 246, 222, 158, 255 }, s * .07)
-    Art.Circle(vg, x, y - s * .38, s * .08 + math.sin(time * 2 + r.id) * s * .015,
-        { 250, 216, 130, 240 }, p.outline, s * .04)
-    if r.tech > 0 then
-        Art.Circle(vg, x + s * .26, y - s * .38, s * .08, { 168, 206, 214, 255 }, p.outline, s * .04)
-    end
-    for i = 1, r.remaining do
-        Art.Circle(vg, x - s * .20 + (i - 1) * s * .13, y + s * .30, s * .05, { 232, 208, 148, 255 })
-    end
-end
-
 return Art

@@ -88,7 +88,7 @@ end
 function Battlefield:OnPointerUp(event)
     if self.dragging and not self.dragMoved then
         local x,y = self:WorldPoint(event.x,event.y)
-        if C.buildings[self.tool] or self.tool == "erase" then
+        if C.buildings[self.tool] then
             self.sim:Perform(self.tool,x,y)
         else
             local cell = self.sim.grid:Get(x,y)
@@ -164,11 +164,6 @@ function Battlefield:Render(vg)
     end
     Art.Flag(vg,wx+s*.17,oy+(C.gateTop-1.1)*s,s*.8,{ 226,177,99,255 },self.sim.time)
     Art.Flag(vg,wx+s*.17,oy+(C.gateTop+C.gateWidth)*s,s*.8,{ 226,177,99,255 },self.sim.time+2)
-    if self.sim.phase == "develop" then
-        for _,r in ipairs(self.sim.resources) do
-            Art.Resource(vg,r,ox+(r.x-.5)*s,oy+(r.y-.5)*s,s*.9,self.sim.time)
-        end
-    end
     for _,b in ipairs(self.sim.grid.buildings) do
         local def=C.buildings[b.kind]
         if b.x+def.w>=startCol and b.x<=endCol then
@@ -199,15 +194,7 @@ function Battlefield:Render(vg)
         nvgStrokeColor(vg,Art.Color(e.color,alpha)); nvgStrokeWidth(vg,1.5); nvgStroke(vg)
         if e.kind=="aoe" then Art.Circle(vg,x,y,radius,{ e.color[1],e.color[2],e.color[3],math.floor(alpha*.2) }) end
     end
-    if self.tool == "erase" and self.hoverX>0 and self.hoverY>0 then
-        local cell = self.sim.grid:Get(self.hoverX,self.hoverY)
-        local x,y=ox+(self.hoverX-1)*s,oy+(self.hoverY-1)*s
-        if cell and cell.building>0 then
-            Art.Rect(vg,x,y,s,s,{ 225,117,95,110 },2)
-            nvgBeginPath(vg); nvgRect(vg,x+1,y+1,s-2,s-2)
-            nvgStrokeColor(vg,nvgRGBA(244,138,112,255)); nvgStrokeWidth(vg,2); nvgStroke(vg)
-        end
-    elseif C.buildings[self.tool] and self.hoverX>0 and self.hoverY>0 then
+    if C.buildings[self.tool] and self.hoverX>0 and self.hoverY>0 then
         local def=C.buildings[self.tool]
         local w,h=def.w,def.h
         local valid=self.sim.grid:CanPlace(self.tool,self.hoverX,self.hoverY)

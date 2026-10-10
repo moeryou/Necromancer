@@ -75,12 +75,12 @@ function Grid:Footprint(x, y, size)
     return true
 end
 
--- 踩踏等级：0 荒野 … 4 加速通道。上限由道路科技决定（techLevel 由 Sim 同步）。
+-- 踩踏等级：0 荒野 … 4 加速通道。没有科技封顶，走得够多就能一路升到加速通道。
 -- 传入的是世界坐标，必须取整后才能索引格子。
-function Grid:TrailLevel(x, y, techLevel)
+function Grid:TrailLevel(x, y)
     local cell = self:Get(math.floor(x + 0.5), math.floor(y + 0.5))
     if not cell then return 0 end
-    return math.min(cell.trail, C.TrailCap(techLevel or self.techLevel or 0))
+    return cell.trail
 end
 
 -- 己方单位经过时累积踩踏，走得越多路面越好。
@@ -98,16 +98,14 @@ function Grid:Trample(x, y, amount)
 end
 
 -- 大象需要 2×2 的「硬化路面」及以上；城门允许半跨，因为墙外禁止建造。
-function Grid:LargeRoad(x, y, techLevel)
+function Grid:LargeRoad(x, y)
     if x > C.wallCol then return true end
-    local cap = C.TrailCap(techLevel or self.techLevel or 0)
-    if cap < 3 then return false end
     for dy = 0, 1 do
         for dx = 0, 1 do
             if x + dx <= C.wallCol then
                 local cell = self:Get(x + dx, y + dy)
                 if not cell or cell.building ~= 0 then return false end
-                if math.min(cell.trail, cap) < 3 then return false end
+                if cell.trail < 3 then return false end
             end
         end
     end
@@ -158,6 +156,8 @@ function Grid:FindBuilding(id)
     return nil
 end
 
+-- 建筑一旦落下就不能拆除：营地规划是单向决策。
+-- 唯一的例外是「阻碍墙」的整条移除（供内部布局调整使用）。
 function Grid:RemoveBuilding(id)
     for i, b in ipairs(self.buildings) do
         if b.id == id then
@@ -171,16 +171,6 @@ function Grid:RemoveBuilding(id)
         end
     end
     return 0
-end
-
-function Grid:Edit(tool, x, y)
-    local cell = self:Get(x, y)
-    if not cell then return false, "地图外不可操作", 0 end
-    if tool ~= "erase" then return false, "此地形不可编辑", 0 end
-    if cell.building > 0 then
-        return true, "拆除建筑，返还 55% 资源", -math.floor(self:RemoveBuilding(cell.building) * C.refundRate)
-    end
-    return false, "这里没有可拆除的建筑", 0
 end
 
 -- 四邻域 A*：通行成本由踩踏等级决定（路越好越省代价），建筑为硬障碍。
@@ -218,12 +208,12 @@ function Grid:Path(sx, sy, tx, ty, size, strictLarge)
             closed[n.k] = true
             for _, d in ipairs(dirs) do
                 local x, y = n.x + d[1], n.y + d[2]
-                if self:Footprint(x, y, size) and (not strictLarge or self:LargeRoad(x, y, self.techLevel)) then
+                if self:Footprint(x, y, size) and (not strictLarge or self:LargeRoad(x, y)) then
                     local k = key(x, y)
                     local step = C.trailCost[self:TrailLevel(x, y) + 1]
                     -- 营地内略向右偏置，返程与采集仍遵从实际目标方向。
                     if x < C.wallCol and tx > sx and d[1] < 0 then step = step + 0.35 end
-                    if size == 2 and x < C.wallCol and not self:LargeRoad(x, y, self.techLevel) then step = step + 2 end
+                    if size == 2 and x < C.wallCol and not self:LargeRoad(x, y) then step = step + 2 end
                     local cost = costs[n.k] + step
                     if not closed[k] and (not costs[k] or cost < costs[k]) then
                         costs[k], parent[k] = cost, n.k

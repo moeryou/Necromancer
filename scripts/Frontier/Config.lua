@@ -4,22 +4,15 @@ local Config = {
     cols = 44, rows = 12, wallCol = 18, gateTop = 5, gateWidth = 3,
     developTime = 90, startGold = 420, wallHealth = 800,
     passiveIncome = 2.5, commandCost = 15, commandCooldown = 8,
-    armyLimit = 100, fixedStep = 1 / 30,
-    refundRate = 0.55,
-    -- 道路不是铺设出来的地形，而是己方部队反复踩踏累积的痕迹：
-    -- 阈值近似"经过此格的单位次数"，踩的人多，荒野就逐渐变成土路。
+    -- 我方同时存在的士兵上限。生产与转职都不突破这个数字。
+    armyLimit = 5, fixedStep = 1 / 30,
+    -- 道路既不能铺设也不能拆除，完全由部队反复踩踏累积而成：
+    -- 阈值近似"经过此格的单位次数"，踩的人多，荒野就逐渐变成加速通道。
     trailThresholds = { 3, 8, 16, 28 },
     trailSpeed = { 1.0, 1.12, 1.30, 1.55, 1.85 },
     trailCost = { 1.0, 0.85, 0.72, 0.60, 0.50 },
     trailNames = { "荒野", "踩踏痕迹", "土路", "硬化路面", "加速通道" },
 }
-
--- 科技只决定"踩踏能达到的最高等级"，等级本身仍然要靠部队走出来。
-function Config.TrailCap(techLevel)
-    if techLevel >= 3 then return 4 end
-    if techLevel >= 1 then return 3 end
-    return 2
-end
 
 ---@class FrontierBuildDef
 ---@field name string
@@ -32,20 +25,19 @@ end
 ---@field color number[]
 ---@field description string
 ---@field short string
----@field tech? number
 
 ---@type table<string, FrontierBuildDef>
 Config.buildings = {
-    barracks = { name = "民兵营", short = "兵", w = 2, h = 2, cost = 90, interval = 6,
-        unit = "militia", color = { 205, 133, 78 }, description = "每 6 秒生产民兵 · 2×2" },
-    shield = { name = "盾牌工坊", short = "盾", w = 1, h = 2, cost = 70, interval = 10,
+    barracks = { name = "民兵营", short = "兵", w = 2, h = 2, cost = 90, interval = 12,
+        unit = "militia", color = { 205, 133, 78 }, description = "每 12 秒生产民兵 · 2×2" },
+    shield = { name = "盾牌工坊", short = "盾", w = 1, h = 2, cost = 70, interval = 20,
         upgrade = "heavy", color = { 116, 158, 168 }, description = "途经拾取盾牌 → 重甲步兵 · 1×2" },
-    bow = { name = "弓箭作坊", short = "弓", w = 1, h = 2, cost = 80, interval = 9,
+    bow = { name = "弓箭作坊", short = "弓", w = 1, h = 2, cost = 80, interval = 18,
         upgrade = "archer", color = { 123, 157, 94 }, description = "途经拾取弓箭 → 弓箭手 · 1×2" },
-    stable = { name = "马厩", short = "骑", w = 2, h = 2, cost = 110, interval = 13,
+    stable = { name = "马厩", short = "骑", w = 2, h = 2, cost = 110, interval = 26,
         upgrade = "cavalry", color = { 174, 133, 95 }, description = "途经拾取马匹 → 轻骑兵 · 2×2" },
-    elephant = { name = "大象驯养栏", short = "象", w = 2, h = 2, cost = 180, interval = 24,
-        unit = "elephant", tech = 1, color = { 153, 135, 184 }, description = "每 24 秒生产大象 · 需双格硬化路" },
+    elephant = { name = "大象驯养栏", short = "象", w = 2, h = 2, cost = 180, interval = 48,
+        unit = "elephant", color = { 153, 135, 184 }, description = "每 48 秒生产大象 · 需双格硬化路" },
     tower = { name = "城墙箭塔", short = "塔", w = 1, h = 1, cost = 95, interval = 1.4,
         color = { 196, 167, 106 }, description = "仅建于城墙 · 射程 8 格 · 1×1" },
     block = { name = "阻碍墙", short = "墙", w = 1, h = 1, cost = 12, interval = 0,
@@ -85,20 +77,9 @@ Config.units = {
         speed = 0.8, interval = 1.6, size = 1, color = { 171, 88, 79 }, sight = 6 },
     shooter = { name = "敌方射手", hp = 35, armor = 0, damage = 8, range = 4.5, ranged = true,
         speed = 0.9, interval = 1.6, size = 1, color = { 213, 129, 107 }, sight = 7 },
-    flanker = { name = "游袭者", hp = 50, armor = 0, damage = 10, range = 1,
-        speed = 2, interval = 1.2, size = 1, color = { 233, 139, 81 }, sight = 4 },
-    guardian = { name = "荒野守卫", hp = 28, armor = 0, damage = 5, range = 1,
-        speed = 0.9, interval = 1.5, size = 1, color = { 175, 126, 113 }, sight = 3.8 },
     boss = { name = "破城巨兽", hp = 1500, armor = 3, damage = 30, range = 2.0, aoe = 2.1,
         speed = 0.55, interval = 2, size = 2, color = { 215, 93, 82 }, sight = 8 },
 }
-Config.techNames = { "硬化路面", "拓宽车道", "加速通道" }
-Config.techDescriptions = {
-    "踩踏上限升至「硬化路面」+55% 移速 · 大象需要硬化路面",
-    "「土路」及以上并行数 +1 · 缓解拥堵",
-    "踩踏上限升至「加速通道」+85% 移速",
-}
-Config.techCosts = { 1, 2, 3 }
-Config.commandNames = { collect = "收集资源", defend = "驻守城门", attack = "全力进攻", wait = "城外待命" }
-Config.commandNotes = { collect = "自主采集 · 部队分散，城门空虚", defend = "依墙固守 · 密集站位易受范围伤害", attack = "前压追击 · 远离城墙，后方空虚" }
+Config.commandNames = { defend = "驻守城门", attack = "全力进攻", wait = "城外待命" }
+Config.commandNotes = { defend = "依墙固守 · 密集站位易受范围伤害", attack = "前压追击 · 远离城墙，后方空虚" }
 return Config
