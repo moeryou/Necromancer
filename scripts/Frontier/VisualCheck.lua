@@ -14,7 +14,7 @@ function Start()
     local sim=field.sim
     -- 玩家等价操作：只摆建筑。道路由部队自己踩出来，无需也无法铺设。
     sim.gold=2000
-    local builds={ {"shield",4,3},{"bow",7,3},{"stable",9,3},{"barracks",2,8},
+    local builds={ {"shield",13,3},{"bow",16,3},{"stable",18,3},{"barracks",2,8},
         {"tower",C.wallCol,4},{"tower",C.wallCol,8} }
     for _,b in ipairs(builds) do
         sim:Perform(b[1],b[2],b[3])

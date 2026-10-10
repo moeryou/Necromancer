@@ -54,56 +54,56 @@ function Start()
         for _,p in ipairs({{6,6},{7,6},{6,7},{7,7}}) do Wear(sim,p[1],p[2],2) end
         Check(not sim.grid:LargeRoad(6,6),"土路不满足大象道路要求")
         sim=Simulation.New(); OpenCamp(sim)
-        local b=sim.grid:AddBuilding("shield",5,5)
+        local b=sim.grid:AddBuilding("shield",14,5)
         b.stock=1
-        local a=sim:AddUnit("militia","ally",6,5)
-        local z=sim:AddUnit("militia","ally",6,6)
+        local a=sim:AddUnit("militia","ally",15,5)
+        local z=sim:AddUnit("militia","ally",15,6)
         sim:UpgradeUnit(a); sim:UpgradeUnit(z)
         Check(a.kind=="heavy" and z.kind=="militia" and b.stock==0,"一份库存仅转职先到单位")
-        local bow=sim.grid:AddBuilding("bow",3,4)
+        local bow=sim.grid:AddBuilding("bow",12,4)
         bow.stock=2
         a.x,a.y=4,4
         sim:UpgradeUnit(a)
         Check(a.kind=="heavy" and bow.stock==2,"单位只允许一次不可逆转职")
         sim.units={}
-        local elephant=sim:AddUnit("elephant","ally",7.5,6.5)
-        sim:Move(elephant,11.5,6.5,C.fixedStep)
-        Check(elephant.state=="窄路卡滞" and elephant.x==7.5,"大象在荒野停滞")
-        for y=6,7 do for x=7,13 do Wear(sim,x,y,3) end end
+        local elephant=sim:AddUnit("elephant","ally",16.5,6.5)
+        sim:Move(elephant,20.5,6.5,C.fixedStep)
+        Check(elephant.state=="窄路卡滞" and elephant.x==16.5,"大象在荒野停滞")
+        for y=6,7 do for x=16,22 do Wear(sim,x,y,3) end end
         sim.grid.version=sim.grid.version+1
-        for _=1,60 do sim:Move(elephant,11.5,6.5,C.fixedStep) end
-        Check(elephant.x>8,"大象在两格硬化路面正常行军")
-        for y=6,7 do for x=13,C.wallCol do Wear(sim,x,y,3) end end
+        for _=1,60 do sim:Move(elephant,20.5,6.5,C.fixedStep) end
+        Check(elephant.x>17,"大象在两格硬化路面正常行军")
+        for y=6,7 do for x=22,C.wallCol do Wear(sim,x,y,3) end end
         Check(sim.grid:LargeRoad(C.wallCol,6),"大象半跨城门时不要求城外踩踏")
         -- 换一张干净网格：上面的转职测试留下的建筑会挡住绕路。
         sim=Simulation.New(); OpenCamp(sim)
         for x=2,C.wallCol do for y=5,6 do Wear(sim,x,y,3) end end
-        for y=5,6 do Wear(sim,7,y,0) end
+        for y=5,6 do Wear(sim,16,y,0) end
         for y=5,11 do
-            for _,x in ipairs({5,6,8,9}) do Wear(sim,x,y,3) end
+            for _,x in ipairs({14,15,17,18}) do Wear(sim,x,y,3) end
         end
-        for y=10,11 do for x=5,9 do Wear(sim,x,y,3) end end
+        for y=10,11 do for x=14,18 do Wear(sim,x,y,3) end end
         sim.grid.version=sim.grid.version+1
-        local detour=sim.grid:Path(5,5,11,5,2,true)
+        local detour=sim.grid:Path(14,5,20,5,2,true)
         Check(detour~=nil,"大象能找到更长的双宽硬化绕路")
         if detour then
             for _,point in ipairs(detour) do Check(sim.grid:LargeRoad(point.x,point.y),"硬化绕路不经过荒野捷径") end
         end
         sim.units={}
-        local walker=sim:AddUnit("elephant","ally",5.5,5.5)
-        for _=1,45*30 do sim:Move(walker,11.5,5.5,C.fixedStep) end
-        Check(walker.x>10,"有完整硬化绕路时大象不永久卡滞在荒野捷径")
+        local walker=sim:AddUnit("elephant","ally",14.5,5.5)
+        for _=1,45*30 do sim:Move(walker,20.5,5.5,C.fixedStep) end
+        Check(walker.x>19,"有完整硬化绕路时大象不永久卡滞在荒野捷径")
         sim.units={}
-        for y=5,7 do for x=11,C.wallCol do Wear(sim,x,y,3) end end
-        local first=sim:AddUnit("militia","ally",13,5)
-        local second=sim:AddUnit("elephant","ally",12.5,6.5)
-        local third=sim:AddUnit("militia","ally",13,7)
+        for y=5,7 do for x=20,C.wallCol do Wear(sim,x,y,3) end end
+        local first=sim:AddUnit("militia","ally",22,5)
+        local second=sim:AddUnit("elephant","ally",21.5,6.5)
+        local third=sim:AddUnit("militia","ally",22,7)
         first.ticket,second.ticket,third.ticket=1,2,3
         sim:GateStep()
         Check(first.gateSlots==1 and second.gateSlots==2 and third.gateSlots==0 and sim.gateUsed==3,"城门先到先得，普通1位大象2位")
         sim.units={}
-        local obstruction=sim.grid:AddBuilding("block",13,5)
-        local validLane=sim:AddUnit("elephant","ally",12.5,6.5)
+        local obstruction=sim.grid:AddBuilding("block",22,5)
+        local validLane=sim:AddUnit("elephant","ally",21.5,6.5)
         validLane.ticket=4
         sim:GateStep()
         Check(validLane.gateLane==2 and validLane.gateSlots==2,"上门行被建筑阻断时大象使用可达下两行")
@@ -181,7 +181,7 @@ function Start()
         -- 从干净空地开始，以正常资源与生产推进整局，不直接修改兵种或战斗属性。
         -- 道路不再是买来的，只能靠部队自己踩出来。
         sim=Simulation.New(); OpenCamp(sim)
-        sim:Perform("shield",4,3); sim:Perform("bow",7,3); sim:Perform("barracks",2,8)
+        sim:Perform("shield",13,3); sim:Perform("bow",16,3); sim:Perform("barracks",2,8)
         Advance(sim,85)
         sim:Perform("tower",C.wallCol,4); sim:Perform("tower",C.wallCol,8)
         sim:SetCommand("defend")
