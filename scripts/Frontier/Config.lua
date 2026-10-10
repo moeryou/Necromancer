@@ -1,7 +1,9 @@
 -- 所有玩法参数集中配置；一格对应一米，绘制坐标为 X 向右、Y 向下。
 local Config = {
     title = "边境工事 · FRONTIER",
-    cols = 44, rows = 12, wallCol = 18, gateTop = 5, gateWidth = 3,
+    -- 营地占 cols 1..wallCol-1，城墙在 wallCol 列；荒野为 wallCol+1..cols。
+    -- 营地宽度收窄了 4 列，总列数同步收窄，整张地图刚好铺满一屏。
+    cols = 40, rows = 12, wallCol = 14, gateTop = 5, gateWidth = 3,
     developTime = 90, startGold = 420, wallHealth = 800,
     passiveIncome = 2.5, commandCost = 15, commandCooldown = 8,
     -- 我方同时存在的士兵上限。生产与转职都不突破这个数字。

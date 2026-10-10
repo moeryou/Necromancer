@@ -152,14 +152,9 @@ function Interface:Create()
             UI.Spacer(),Label("城门 3 格  ·  唯一出口",9,{ 205,207,162,255 }),
             UI.Spacer(),Label("荒野  /  自主交战",10,{ 207,210,170,255 }),
         } }
-    local mapFooter=UI.Panel { height=42,flexDirection="row",alignItems="center",paddingHorizontal=16,gap=6,backgroundColor=P.panel,
+    local mapFooter=UI.Panel { height=36,flexDirection="row",alignItems="center",paddingHorizontal=16,gap=6,backgroundColor=P.panel,
         borderTopWidth=1,borderTopColor=P.line,children={
             Label("待命",10,P.text,{ id="mapStatus",flexGrow=1,flexShrink=1,maxLines=1 }),
-            Button("←",function() self.battlefield:Pan(-5) end,{ width=32,height=26 }),
-            Button("营地",function() self.battlefield.cameraX=0 end,{ width=48,height=26,fontSize=9 }),
-            Button("城门",function() self.battlefield.cameraX=10 end,{ width=48,height=26,fontSize=9 }),
-            Button("荒野",function() self.battlefield.cameraX=23 end,{ width=48,height=26,fontSize=9 }),
-            Button("→",function() self.battlefield:Pan(5) end,{ width=32,height=26 }),
         } }
     local content=UI.Panel { flexGrow=1,flexBasis=0,flexShrink=1,flexDirection="row",children={
         side,UI.Panel { flexGrow=1,flexBasis=0,flexShrink=1,children={ phaseBar,mapLabels,self.battlefield,mapFooter } },
@@ -217,7 +212,7 @@ function Interface:CreateHelp()
         table.insert(items,UI.Panel { gap=4,children={ Label(item[1],12,P.text,{fontWeight="bold"}),
             Label(item[2],10,P.muted,{whiteSpace="normal",maxLines=4,width="100%"}) } })
     end
-    table.insert(items,Label("浏览模式拖动地图 / 滚轮或A、D横移 / 空格暂停 / 1、2发布指令",9,P.muted,{whiteSpace="normal",maxLines=3,width="100%"}))
+    table.insert(items,Label("整张地图铺满屏幕 / 空格暂停 / 1、2发布指令",9,P.muted,{whiteSpace="normal",maxLines=3,width="100%"}))
     table.insert(items,Button("明白了，返回营地  →",function() self:Help(false) end,{width="100%",backgroundColor=P.gold,textColor=P.bg}))
     return UI.Panel { id="help",visible=false,position="absolute",left=0,top=0,right=0,bottom=0,
         backgroundColor={20,28,24,225},justifyContent="center",alignItems="center",children={
@@ -234,7 +229,7 @@ function Interface:CreateEnd()
                 Label("",12,P.muted,{id="endStats",textAlign="center"}),
                 Label("布局决定生产线，生产线决定战线。",11,P.text,{textAlign="center"}),
                 Button("重新规划 · 再战一次",function()
-                    self.sim:Init(); self.battlefield.sim=self.sim; self.battlefield.cameraX=0
+                    self.sim:Init(); self.battlefield.sim=self.sim
                     self:Select("inspect"); self:Update(1)
                 end,{width="100%",backgroundColor=P.gold,textColor=P.bg}),
             } },
@@ -267,7 +262,7 @@ function Interface:Update(dt)
     if wb then wb:SetDisabled(sim.phase~="develop"); wb:SetText(sim.phase=="develop" and ("迎敌 +"..math.floor(sim.phaseTime*.65).."  →") or "敌军来袭") end
     self:Text("counts","部队 "..sim:ArmyCount().." · 转职 "..sim.converted.." · 击败 "..sim.kills)
     local info=C.buildings[self.tool]
-    self:Text("mapStatus",info and (info.name.." · "..info.description) or ("浏览模式 · 拖动地图 / 滚轮横移 · 城门占用 "..sim.gateUsed.."/3"))
+    self:Text("mapStatus",info and (info.name.." · "..info.description) or ("一屏看完全场 · 城门占用 "..sim.gateUsed.."/3"))
     local level=sim:RoadLevel()
     self:Text("roadLevel",C.trailNames[level+1].."  ·  "..math.floor(sim.roadProgress*100).."% 通行段达标")
     self:Text("commandHint",sim.commandTimer>0 and ("   /   冷却 "..math.ceil(sim.commandTimer).." 秒 · "..C.commandNames[sim.command]) or ("   /   15资源 · 当前："..C.commandNames[sim.command]))

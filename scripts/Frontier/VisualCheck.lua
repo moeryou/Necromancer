@@ -14,8 +14,8 @@ function Start()
     local sim=field.sim
     -- 玩家等价操作：只摆建筑。道路由部队自己踩出来，无需也无法铺设。
     sim.gold=2000
-    local builds={ {"shield",6,3},{"bow",9,3},{"stable",12,3},{"barracks",2,8},
-        {"tower",18,4},{"tower",18,8} }
+    local builds={ {"shield",4,3},{"bow",7,3},{"stable",9,3},{"barracks",2,8},
+        {"tower",C.wallCol,4},{"tower",C.wallCol,8} }
     for _,b in ipairs(builds) do
         sim:Perform(b[1],b[2],b[3])
     end
@@ -24,6 +24,5 @@ function Start()
     sim:StartWave(true)
     for _=1,24*30 do sim:Step(C.fixedStep) end
     sim.paused=true
-    field.cameraX=8
     print("[场景验证] 实际生产="..sim.produced.." 实际转职="..sim.converted.." 军队="..sim:ArmyCount().." 敌军="..sim:EnemyCount().." 主路="..sim:RoadLevel())
 end

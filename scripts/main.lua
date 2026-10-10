@@ -49,8 +49,6 @@ function HandleFrontierUpdate(eventType, eventData)
             steps = steps + 1
         end
     else accumulator = 0 end
-    if input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT) then hud.battlefield:Pan(-dt*12) end
-    if input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT) then hud.battlefield:Pan(dt*12) end
     hud:Update(dt)
 end
 

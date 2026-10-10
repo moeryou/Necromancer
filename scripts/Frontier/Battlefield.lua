@@ -4,7 +4,6 @@ local Art = require "Frontier.Artwork"
 
 ---@class FrontierBattlefield : Widget
 ---@field sim FrontierSim
----@field cameraX number
 ---@field zoom number
 ---@field tile number
 ---@field originX number
@@ -16,7 +15,6 @@ local Art = require "Frontier.Artwork"
 ---@field hoverY number
 ---@field dragX number
 ---@field dragY number
----@field dragCamera number
 ---@field dragging boolean
 ---@field dragMoved boolean
 ---@field lastCell string
@@ -28,22 +26,21 @@ function Battlefield:Init(props)
     props.overflow, props.pointerEvents = "hidden", "auto"
     UI.Widget.Init(self, props)
     self.sim = props.sim
-    self.cameraX, self.zoom, self.tile = 0, 1, 36
+    self.zoom, self.tile = 1, 36
     self.originX, self.originY, self.viewWidth, self.viewHeight = 0, 0, 1, 1
     self.tool, self.hoverX, self.hoverY = "inspect", 0, 0
-    self.dragX, self.dragY, self.dragCamera = 0, 0, 0
+    self.dragX, self.dragY = 0, 0
     self.dragging, self.dragMoved, self.lastCell = false, false, ""
 end
 
+-- 整张地图缩放到视口内：不再有横向卷动，一屏看完全场。
 function Battlefield:UpdateGeometry()
     local l = self:GetAbsoluteLayout()
     self.viewWidth, self.viewHeight = l.w, l.h
-    self.tile = math.max(18, math.min(44, (l.h - 70) / C.rows)) * self.zoom
-    self.originX = l.x + 24 - self.cameraX * self.tile
-    self.originY = l.y + math.max(34, (l.h - C.rows*self.tile)*0.5)
-    local maxCamera = math.max(0, C.cols - (l.w - 48) / self.tile)
-    self.cameraX = math.max(0, math.min(maxCamera, self.cameraX))
-    self.originX = l.x + 24 - self.cameraX * self.tile
+    local marginX, marginY = 14, 22
+    self.tile = math.max(4, math.min((l.w - marginX * 2) / C.cols, (l.h - marginY * 2) / C.rows)) * self.zoom
+    self.originX = l.x + (l.w - C.cols * self.tile) * 0.5
+    self.originY = l.y + (l.h - C.rows * self.tile) * 0.5
 end
 
 function Battlefield:WorldPoint(x, y)
@@ -57,18 +54,16 @@ function Battlefield:SetTool(tool)
 end
 
 function Battlefield:Pan(amount)
-    self.cameraX = self.cameraX + amount
-    self:UpdateGeometry()
+    -- 整图铺满视口后不再需要横向卷动，保留空实现兼容旧调用。
 end
 
 function Battlefield:OnWheel(dx, dy)
-    self:Pan(-dy * 2 + dx * 2)
 end
 
 function Battlefield:OnPointerDown(event)
     if not event:IsPrimaryButton() and event.pointerType ~= "touch" then return end
     self.dragging, self.dragMoved = true, false
-    self.dragX, self.dragY, self.dragCamera = event.x, event.y, self.cameraX
+    self.dragX, self.dragY = event.x, event.y
     self.lastCell = ""
     self.hoverX, self.hoverY = self:WorldPoint(event.x,event.y)
     -- 地形不可编辑：点击只用于浏览和放置建筑。
@@ -77,11 +72,9 @@ end
 
 function Battlefield:OnPointerMove(event)
     self.hoverX, self.hoverY = self:WorldPoint(event.x,event.y)
-    if self.dragging and self.tool == "inspect" then
-        local delta = event.x-self.dragX
-        if math.abs(delta)+math.abs(event.y-self.dragY)>6 then self.dragMoved = true end
-        self.cameraX = self.dragCamera - delta/self.tile
-        self:UpdateGeometry()
+    -- 整图铺满后不再平移，但拖拽仍要与点击区分：拖动过就不算放置建筑。
+    if self.dragging then
+        if math.abs(event.x-self.dragX)+math.abs(event.y-self.dragY)>6 then self.dragMoved = true end
     end
 end
 
@@ -122,8 +115,7 @@ function Battlefield:Render(vg)
     Art.Rect(vg,l.x,l.y,l.w,l.h,pal.grassOut)
     local gradient = nvgLinearGradient(vg,0,l.y,0,l.y+l.h,nvgRGBA(128,180,90,255),nvgRGBA(96,146,68,255))
     nvgBeginPath(vg); nvgRect(vg,l.x,l.y,l.w,l.h); nvgFillPaint(vg,gradient); nvgFill(vg)
-    local startCol = math.max(1,math.floor(self.cameraX))
-    local endCol = math.min(C.cols,math.ceil(self.cameraX+l.w/s)+1)
+    local startCol, endCol = 1, C.cols
     -- 地图边缘森林与散落植被，细节由坐标哈希决定而非每帧随机。
     for x=startCol,endCol do
         if x%3 == 0 then
@@ -205,18 +197,6 @@ function Battlefield:Render(vg)
         nvgStrokeColor(vg,valid and nvgRGBA(243,223,160,255) or nvgRGBA(244,138,112,255))
         nvgStrokeWidth(vg,2); nvgStroke(vg)
     end
-    -- 底部缩略全图。点击导航由独立UI按钮负责，这里仅提供视觉信息。
-    local mw=math.min(280,l.w*.35)
-    local mx,my=l.x+l.w-mw-20,l.y+l.h-26
-    Art.Rect(vg,mx-6,my-6,mw+12,18,{ 44,56,42,215 },3,pal.outline,1.2)
-    Art.Rect(vg,mx,my,mw*C.wallCol/C.cols,6,pal.grassIn,1)
-    Art.Rect(vg,mx+mw*C.wallCol/C.cols,my,mw*(C.cols-C.wallCol)/C.cols,6,pal.grassOut,1)
-    for _,u in ipairs(self.sim.units) do
-        if self.sim:Active(u) then Art.Circle(vg,mx+mw*u.x/C.cols,my+3,1.3,u.team=="ally" and { 216,210,145,255 } or { 221,113,90,255 }) end
-    end
-    local visible=(l.w-48)/s
-    nvgBeginPath(vg); nvgRect(vg,mx+mw*self.cameraX/C.cols,my-2,math.min(mw,mw*visible/C.cols),10)
-    nvgStrokeColor(vg,nvgRGBA(228,214,164,230)); nvgStrokeWidth(vg,1); nvgStroke(vg)
     nvgRestore(vg)
 end
 return Battlefield
