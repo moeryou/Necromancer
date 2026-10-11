@@ -165,7 +165,8 @@ function Battlefield:Render(vg)
     nvgIntersectScissor(vg,l.x,l.y,l.w,l.h)
     local pal = Art.palette
     Art.Rect(vg,l.x,l.y,l.w,l.h,pal.grassOut)
-    local gradient = nvgLinearGradient(vg,0,l.y,0,l.y+l.h,nvgRGBA(128,180,90,255),nvgRGBA(96,146,68,255))
+    -- 月光渐变：顶部偏亮紫绿（月光洒下），底部沉入深紫，制造夜色纵深。
+    local gradient = nvgLinearGradient(vg,0,l.y,0,l.y+l.h,nvgRGBA(112,140,124,255),nvgRGBA(72,96,104,255))
     nvgBeginPath(vg); nvgRect(vg,l.x,l.y,l.w,l.h); nvgFillPaint(vg,gradient); nvgFill(vg)
     local startCol, endCol = 1, C.cols
     -- 地面按 (列,行,色块) 归并成少量 path：33×12 格从 396 次 fill 降到十几次，
@@ -239,7 +240,8 @@ function Battlefield:Render(vg)
         local dx,dy=target and target.x-p.x or 1,target and target.y-p.y or 0
         local d=math.max(.1,math.sqrt(dx*dx+dy*dy))
         local x,y=ox+(p.x-.5)*s,oy+(p.y-.5)*s
-        Art.Line(vg,x,y,x-dx/d*s*.28,y-dy/d*s*.28,p.team=="ally" and { 248,222,157,255 } or { 227,137,100,255 },1.5)
+        -- 我方弹道=鬼火绿（亡灵魔法），敌方弹道=糖果粉（捣蛋鬼的糖）。
+        Art.Line(vg,x,y,x-dx/d*s*.28,y-dy/d*s*.28,p.team=="ally" and { 196,250,158,255 } or { 240,140,170,255 },1.5)
     end
     for _,e in ipairs(self.sim.effects) do
         local alpha=math.floor(210*e.life/e.maxLife)

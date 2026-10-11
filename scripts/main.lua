@@ -15,7 +15,7 @@ function Start()
     graphics.windowTitle = C.title
     input.mouseMode = MM_ABSOLUTE
     UI.Init({
-        theme = "default-dark",
+        theme = require "Frontier.SpookyTheme",
         scale = UI.Scale.DEFAULT,
         fonts = { { family = "sans", weights = {
             normal = "Fonts/MiSans-Regular.ttf", bold = "Fonts/MiSans-Bold.ttf",
@@ -25,7 +25,7 @@ function Start()
     hud = Interface.New(sim)
     SubscribeToEvent("Update", "HandleFrontierUpdate")
     SubscribeToEvent("KeyDown", "HandleFrontierKey")
-    print("[启动] 边境工事已就绪：网格规划、兵力上限5、有限库存转职、道路自发生成")
+    print("[启动] 亡灵工坊已就绪：网格规划、兵力上限5、有限库存加工、路面自发生成")
 end
 
 function Stop()

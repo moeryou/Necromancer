@@ -146,7 +146,7 @@ function Sim:Init()
     self.nextUnit, self.nextTicket = 1, 1
     self.kills, self.converted, self.produced, self.harvested = 0, 0, 0, 0
     self.allyCount, self.enemyCount, self.farmerCount = 0, 0, 0
-    self.notice = "民兵营与农民营已就绪。建仓库、让农民采集资源，再规划你的生产线。"
+    self.notice = "骷髅兵营与南瓜农场已就绪。建仓库、让亡灵农夫采集灵魂，再规划你的生产线。"
     self.noticeTime, self.gateUsed, self.blockedCount = 8, 0, 0
     self.pathBlocked = 0
     -- 交互格独占表：cellKey -> 占用单位 id（见 FarmerGoal）。
@@ -291,7 +291,7 @@ function Sim:ProcessUnit(u)
                 -- 重装工序额外消耗矿物资源值，资源不足则跳过加工（不扣、不标记）。
                 if u.lastReject ~= pr.tag then
                     u.lastReject = pr.tag
-                    self:Notify("矿物不足（需 " .. C.heavyProcessCost .. " 资源值），无法完成" .. pr.label)
+                    self:Notify("幽灵石不足（需 " .. C.heavyProcessCost .. " 灵魂值），无法完成" .. pr.label)
                 end
             else
                 if C.heavyProcessings[pr.tag] then self.gold = self.gold - C.heavyProcessCost end
@@ -335,11 +335,11 @@ function Sim:Perform(tool, x, y)
     if def then
         local ok, reason = self.grid:CanPlace(tool, x, y)
         if not ok then self:Notify(reason); return false end
-        if self.gold < def.cost then self:Notify("资源不足"); return false end
+        if self.gold < def.cost then self:Notify("灵魂不足"); return false end
         for _, u in ipairs(self.units) do
             if self:Active(u) and u.x + u.size * 0.42 > x - 0.5 and u.x - u.size * 0.42 < x + def.w - 0.5
                 and u.y + u.size * 0.42 > y - 0.5 and u.y - u.size * 0.42 < y + def.h - 0.5 then
-                self:Notify("有单位正在经过，请等待空位"); return false
+                self:Notify("有亡灵正在经过，请等待空位"); return false
             end
         end
         self.grid:AddBuilding(tool, x, y)
@@ -360,14 +360,14 @@ function Sim:Demolish(x, y)
     local refund = math.floor(def.cost * C.refundRatio)
     self.grid:RemoveBuilding(b.id)
     self.gold = self.gold + refund
-    self:Notify("已拆除" .. def.name .. "，返还 " .. refund .. " 资源")
+    self:Notify("已拆除" .. def.name .. "，返还 " .. refund .. " 灵魂")
     return true
 end
 
 function Sim:SetCommand(command)
     if self.phase == "victory" or self.phase == "defeat" then return end
     if self.commandTimer > 0 then self:Notify("全局指令冷却中"); return end
-    if self.gold < C.commandCost then self:Notify("发布指令需要15资源"); return end
+    if self.gold < C.commandCost then self:Notify("发布指令需要15灵魂"); return end
     self.gold = self.gold - C.commandCost
     self.command, self.commandTimer = command, C.commandCooldown
     self.commandVersion = self.commandVersion + 1
@@ -383,7 +383,7 @@ function Sim:StartWave(early)
     if early and self.phaseTime > 0 then
         local reward = math.floor(self.phaseTime * 0.65)
         self.gold = self.gold + reward
-        self:Notify("提前迎敌！奖励 " .. reward .. " 资源；趁敌人还没到，先摆好产线")
+        self:Notify("提前开门！奖励 " .. reward .. " 灵魂；趁捣蛋鬼还没到，先摆好产线")
     end
     self.phase, self.phaseTime, self.spawnTimer = "battle", 0, 0.2
     self.waveQueue = {}
@@ -402,12 +402,12 @@ end
 function Sim:StartBoss()
     self.phase, self.phaseTime, self.wave, self.spawnTimer = "boss", 0, 4, 0.1
     self.waveQueue = { "boss", "brute", "shooter", "brute", "shooter", "brute" }
-    self:Notify("最终决战：破城巨兽。分散部队，避免城门密集受击。")
+    self:Notify("最终决战：南瓜王。分散亡灵，避免墓门密集受击。")
 end
 
 function Sim:WaveComplete()
     self.gold = self.gold + 100 + self.wave * 30
-    self:Notify("第 " .. self.wave .. " 波击退！获得资源补给")
+    self:Notify("第 " .. self.wave .. " 波击退！获得灵魂补给")
     if self.wave == 3 then self:StartBoss(); return end
     self.wave = self.wave + 1
     self.phase, self.phaseTime = "develop", C.developTime
@@ -448,7 +448,7 @@ function Sim:Damage(target, amount)
         if target.team == "enemy" then self.kills = self.kills + 1 end
         if target.kind == "boss" then
             self.phase = "victory"
-            self:Notify("破城巨兽已倒下，边境守住了！")
+            self:Notify("南瓜王已倒下，亡灵之夜守住了！")
         end
     end
 end
@@ -932,7 +932,7 @@ function Sim:FarmerGoal(u, dt)
             u.task, u.path, u.leaveTimer = "leaving", {}, 0.4
             if res.stock <= 0 then
                 self.grid:RemoveResource(res)
-                self:Notify(def.name .. "资源点已枯竭，地块恢复为普通营地格")
+                self:Notify(def.name .. "资源点已枯竭，地块恢复为普通墓园格")
             end
         end
         return
@@ -969,7 +969,7 @@ function Sim:FarmerGoal(u, dt)
         if self:AtCell(u, adj) then
             self.gold = self.gold + u.carry
             self.harvested = self.harvested + u.carry
-            self:Effect(u.x, u.y, "upgrade", { 240, 210, 130 }, 0.4)
+            self:Effect(u.x, u.y, "upgrade", { 196, 250, 158 }, 0.4)
             u.carry, u.carryKind = 0, nil
             -- 卸货同样遵守"作业完成即离"，先腾出卸货位。
             self:ReleaseSlot(u)
@@ -1063,7 +1063,7 @@ function Sim:EnemyGoal(u, dt)
             self.wallHp = math.max(0, self.wallHp - t.damage * C.wallDamageScale)
             u.cooldown = t.interval
             self:Effect(C.wallCol, u.y, "aoe", C.units[u.kind].color, t.aoe or 0.5)
-            if self.wallHp <= 0 then self.phase = "defeat"; self:Notify("城墙被攻破。重新规划生产线，再战一次。"); end
+            if self.wallHp <= 0 then self.phase = "defeat"; self:Notify("墓墙被攻破。重新规划生产线，再战一夜。"); end
         end
     else
         local y = math.max(2, math.min(C.rows - 1, u.y))
