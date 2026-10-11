@@ -19,23 +19,15 @@ function Layout.Apply(sim)
         end
     end
     local entries = {
-        {"barracks",9,2,350,113,157,139},
-        {"shield",15,2,568,100,150,151},
-        {"warehouse",20,3,752,102,135,160},
-        {"farmerBarracks",3,5,47,325,153,137},
-        {"forge",10,5,307,278,212,165},
-        {"bow",17,5,578,286,253,163},
-        {"stable",10,8,345,483,211,138},
-        {"barracks",4,9,96,528,176,156},
-        {"forge",10,11,330,620,212,165},
-        {"farmerBarracks",17,9,633,547,153,137},
-        {"farmerBarracks",5,11,199,698,84,75},
+        {"barracks",9,2},{"shield",15,2},{"warehouse",20,3},
+        {"farmerBarracks",3,4},{"forge",10,4},{"bow",17,4},
+        {"stable",10,8},{"barracks",4,9},{"forge",10,11},
+        {"farmerBarracks",17,9},{"farmerBarracks",5,11},
     }
     for _,e in ipairs(entries) do
         local kind,x,y = e[1],e[2],e[3]
         assert(grid:CanPlace(kind,x,y), "参考布局占地冲突："..kind)
-        local b = grid:AddBuilding(kind,x,y)
-        b.visualX,b.visualY,b.visualW,b.visualH = e[4],e[5],e[6],e[7]
+        grid:AddBuilding(kind,x,y)
     end
     local resourceEntries = {
         {"forest",20,1},{"forest",2,8},{"forest",19,11},
@@ -49,12 +41,13 @@ function Layout.Apply(sim)
     for _,p in ipairs(farmers) do sim:AddUnit("farmer","ally",p[1],p[2]) end
     local soldiers = {{13,2},{13,4},{8,6},{17,8},{20,8}}
     for _,p in ipairs(soldiers) do sim:AddUnit("militia","ally",p[1],p[2]) end
+    sim.command="defend"
     -- 预先展示当前首波的11名真实敌人；发育阶段不攻击，开波后投入战斗，
     -- 同时从波次队列扣除，不能因为参考构图额外加倍敌人数。
     for i = 1, 7+sim.wave*4 do
         local kind = i%5==0 and "brute" or i%4==0 and "shooter" or "raider"
         local x = 25+((i-1)%4)*2
-        local y = 3+math.floor((i-1)/4)*3+(i%2)*.65
+        local y=3+math.floor((i-1)/4)*3+(i%2)
         local u = sim:AddUnit(kind,"enemy",x,y)
         u.assembling = true
     end

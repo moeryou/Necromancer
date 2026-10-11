@@ -5,6 +5,10 @@ require "main"
 local originalStart = Start
 local UI = require "urhox-libs/UI"
 local C = require "Frontier.Config"
+local View = require "Frontier.WorldView"
+local Art = require "Frontier.Artwork"
+local Simulation = require "Frontier.Simulation"
+local Battlefield = require "Frontier.Battlefield"
 local checks = 0
 
 local function Check(ok, message)
@@ -217,6 +221,99 @@ local function Geometry(field)
     Check(true, "视觉开口与真实墓墙/墓门/箭塔限制一致")
 end
 
+-- 刷新 main 的实际 HUD 而不推进经济/生产；断言异常直接上抛，绝不 pcall 吞掉。
+local function RefreshHUD(sim)
+    local paused=sim.paused
+    sim.paused=true
+    local update=VariantMap() --[[@as UpdateEventData]]
+    update["TimeStep"]=Variant(.15) --[[@as VariantWithFloat]]
+    HandleFrontierUpdate("Update",update)
+    sim.paused=paused
+    UI.Layout()
+end
+
+---@param root Widget
+---@param sim FrontierSim
+---@param kind string
+local function BuildingNotice(root,sim,kind)
+    RefreshHUD(sim)
+    local text=Find(root,"noticeText") --[[@as Label]]
+    local layout=text:GetAbsoluteLayout()
+    Check(sim.notice==C.buildings[kind].name.." · "..C.buildings[kind].description
+        and Find(root,"notice"):IsVisible() and text:IsVisible()
+        and text:GetText()==sim.notice and layout.w>0 and layout.h>0,
+        kind .. "：inspect 原指针回调选中建筑，说明真实可见且文案完整")
+end
+
+---@param root Widget
+---@param field FrontierBattlefield
+local function BuildingGeometry(root,field)
+    -- 加载实际 PNG 后验证所有 kind 的独立资源映射与等比尺寸，防止默认图冒充缺失素材。
+    local names={barracks="barracks",farmerBarracks="pumpkin_farm",shield="coffin",bow="armory",
+        forge="cauldron",aim="building_aim",stable="hut",horn="building_horn",
+        warehouse="building_warehouse",elephant="building_elephant",tower="building_tower",block="building_block"}
+    local vg=UI.GetNVGContext()
+    for kind in pairs(C.buildings) do
+        local name=names[kind]
+        assert(name and Art.BuildingName(kind)==name, "[第二轮验收失败] 建筑资源映射错误："..kind)
+        local image=Art.Load(vg,name)
+        assert(image>0, "[第二轮验收失败] 实际建筑 PNG 加载失败："..kind)
+        local iw,ih=nvgImageSize(vg,image)
+        local aspect=Art.BuildingAspect(kind)
+        assert(iw>0 and ih>0 and Near(aspect,iw/ih), "[第二轮验收失败] 建筑 aspect 不符原图："..kind)
+        for y=1,C.rows-C.buildings[kind].h+1 do
+            local x=kind=="tower" and C.wallCol or 1
+            local candidate={kind=kind,x=x,y=y}
+            local bx,by,bw,bh,bottom=field:BuildingRect(candidate)
+            local vx,vy,vw,vh,vbottom=View.BuildingRect(kind,x,y,aspect)
+            local fx,fy,fw,fh=View.Footprint(kind,x,y)
+            assert(bx==vx and by==vy and bw==vw and bh==vh and bottom==vbottom
+                and Near(bw/bh,aspect) and bottom==fy+fh-5 and Near(by+bh,bottom)
+                and Near(bx+bw*.5,fx+fw*.5), "[第二轮验收失败] 候选建筑投影/aspect/基座错误："..kind)
+        end
+    end
+    Check(true,"所有建筑 kind 使用实际 PNG aspect；候选精灵等比居中、基座为 Footprint 底边-5")
+    Check(not Art.BuildingContains("stable",0,0,100,100,2,2)
+        and Art.BuildingContains("stable",0,0,100,100,50,50),
+        "木屋透明屋顶角不参与拾取，实体中部可点击")
+    Check(not Art.BuildingContains("tower",0,0,100,100,5,5)
+        and Art.BuildingContains("tower",0,0,100,100,50,60),
+        "箭塔透明顶角不遮挡血条，实体塔身可命中")
+    Click(Find(root,"slot_1"))
+    local picked=0
+    for _,b in ipairs(field.sim.grid.buildings) do
+        assert(rawget(b,"visualX")==nil and rawget(b,"visualY")==nil
+            and rawget(b,"visualW")==nil and rawget(b,"visualH")==nil,
+            "[第二轮验收失败] 初始建筑残留绝对视觉覆盖："..b.kind)
+        local actual={field:BuildingRect(b)} ---@type number[]
+        local candidate={field:BuildingRect({kind=b.kind,x=b.x,y=b.y})} ---@type number[]
+        local expected={View.BuildingRect(b.kind,b.x,b.y,Art.BuildingAspect(b.kind))} ---@type number[]
+        for i=1,5 do
+            assert(actual[i]==candidate[i] and actual[i]==expected[i],
+                "[第二轮验收失败] 初始建筑与同 kind/x/y 候选 BuildingRect 不完全一致："..b.kind)
+        end
+        local _,fy,_,fh=View.Footprint(b.kind,b.x,b.y)
+        assert(actual[5]==fy+fh-5, "[第二轮验收失败] 初始建筑基座不落在占地底边-5")
+        local d=C.buildings[b.kind]
+        for dy=0,d.h-1 do
+            for dx=0,d.w-1 do
+                local x,y=b.x+dx,b.y+dy
+                local px,py=field:Project(x,y)
+                local cx,cy=field:WorldPoint(px,py)
+                local cell=field.sim.grid:Get(cx,cy)
+                assert(cx==x and cy==y and cell and cell.building==b.id,
+                    "[第二轮验收失败] footprint 格中心拾取不是所属建筑")
+                Point(field,x,y)
+                assert(field.sim.notice==d.name.." · "..d.description,
+                    "[第二轮验收失败] footprint 格中心被相邻精灵抢走拾取："..b.kind)
+                picked=picked+1
+            end
+        end
+        BuildingNotice(root,field.sim,b.kind)
+    end
+    Check(picked>0,"全部初始建筑与同坐标候选完全一致、无 visualX 覆盖；占地每格中心经真实指针拾取一致")
+end
+
 ---@param sim FrontierSim
 local function Snapshot(sim)
     local values={sim.time,sim.phase,sim.phaseTime,sim.gold,sim.wallHp,sim.commandTimer,
@@ -227,6 +324,147 @@ local function Snapshot(sim)
     for _,b in ipairs(sim.grid.buildings) do values[#values+1]=b.timer end
     for _,r in ipairs(sim.grid.resources) do values[#values+1]=r.stock end
     return table.concat(values,"|")
+end
+
+-- 纯表现输入矩阵使用隔离 Sim 的真实 AddUnit；装备只作为 Artwork 输入 fixture，
+-- 不调用 GrantProcessing/ProcessUnit/Produce，不以 fixture 冒充真实加工成果。
+---@param root Widget
+local function UnitArtwork(root)
+    local isolated=Simulation.New()
+    local cases={
+        {kind="militia",team="ally",gear={},name="ally",w=49,h=47,ax=13,ay=42,scale=1},
+        {kind="militia",team="ally",gear={bow=true},name="ranger",w=128,h=120,ax=59,ay=98,scale=.7},
+        {kind="militia",team="ally",gear={bow=true,forge=true,aim=true},name="ranger",w=128,h=120,ax=59,ay=98,scale=.7},
+        {kind="militia",team="ally",gear={shield=true},name="armored",w=124,h=116,ax=58,ay=98,scale=.75},
+        {kind="militia",team="ally",gear={forge=true},name="heavy",w=124,h=116,ax=58,ay=98,scale=.75},
+        {kind="militia",team="ally",gear={stable=true},name="mounted",w=200,h=180,ax=109,ay=157,scale=.65},
+        {kind="militia",team="ally",gear={stable=true,bow=true,aim=true},name="mounted",w=200,h=180,ax=109,ay=157,scale=.65},
+        {kind="militia",team="ally",gear={stable=true,shield=true,forge=true,horn=true},name="mounted",w=200,h=180,ax=109,ay=157,scale=.65},
+        {kind="elephant",team="ally",gear={stable=true,bow=true},name="elephant",w=264,h=220,ax=125,ay=184,scale=.5},
+        {kind="boss",team="enemy",gear={},name="boss",w=172,h=170,ax=86,ay=143,scale=.75},
+        {kind="raider",team="enemy",gear={},name="hostile_guard",w=84,h=67,ax=42,ay=61,scale=1},
+    }
+    local vg=UI.GetNVGContext()
+    local props={sim=isolated,position="absolute",left=0,top=0,pointerEvents="none"}
+    local field=Battlefield:new(props --[[@as WidgetProps]]) --[[@as FrontierBattlefield]]
+    root:AddChild(field)
+    UI.Layout()
+    for i,case in ipairs(cases) do
+        local image=Art.Load(vg,case.name)
+        assert(image>0, "[第二轮验收失败] 角色实际 PNG 加载失败："..case.name)
+        local iw,ih=nvgImageSize(vg,image)
+        assert(iw==case.w and ih==case.h, "[第二轮验收失败] 角色原图尺寸变化，需复核真实锚点："..case.name)
+        local u=isolated:AddUnit(case.kind,case.team,28,9)
+        u.gear=case.gear
+        u.hp=u.maxHp*.75
+        Check(Art.UnitName(u)==case.name, "隔离表现矩阵 "..i.."："..case.kind.." 装备映射为 "..case.name)
+        local w,h,ax,ay=Art.UnitGeometry(u)
+        assert(Near(w,case.w*case.scale) and Near(h,case.h*case.scale)
+            and Near(ax,case.ax*case.scale) and Near(ay,case.ay*case.scale),
+            "[第二轮验收失败] UnitGeometry 实际尺寸/足点锚点不准确："..case.name)
+        for _,facing in ipairs({-1,1}) do
+            u.facing=facing
+            field:UpdateBars()
+            UI.Layout()
+            local bar=field.bars[u.id]
+            if not bar then error("[第二轮验收失败] 隔离真实单位没有 ProgressBar") end
+            local px,py=field:Project(u.x,u.y)
+            local l=field:GetAbsoluteLayout()
+            local k=field.scaleFactor
+            assert(k>0 and Near(bar.props.left,px-l.x-17*k)
+                and Near(bar.props.top,py-l.y-(case.ay*case.scale+12)*k)
+                and Near(bar.props.width,34*k) and Near(bar.props.height,8*k)
+                and Near(bar:GetValue(),.75) and bar:IsVisible(),
+                "[第二轮验收失败] 血条未使用对应 UnitGeometry 足点锚点："..case.name)
+            local bl=bar:GetAbsoluteLayout()
+            -- Yoga 按物理像素对齐；样式坐标上面已精确验证，布局仅容许一物理像素舍入。
+            local pixel=1/UI.GetScale()+1e-6
+            assert(math.abs(bl.x+bl.w*.5-px)<=pixel
+                and math.abs(bl.y-(py-(case.ay*case.scale+12)*k))<=pixel,
+                "[第二轮验收失败] 血条实际布局偏离角色锚点："..case.name)
+        end
+    end
+    Check(isolated.produced==0 and isolated.converted==0 and isolated.harvested==0,
+        "表现矩阵未调用生产/加工/采集；左右朝向真实血条位置均与 UnitGeometry 锚点一致")
+    isolated:Init()
+    local restartEnemy=isolated:AddUnit("raider","enemy",28,9)
+    field:UpdateBars()
+    local reused=field.bars[restartEnemy.id]
+    assert(reused and reused.props.fillColor==Art.palette.red,
+        "[第二轮验收失败] 重开单位 id 复用后血条沿用旧阵营颜色")
+    Check(true,"重开后相同单位 id 的血条刷新阵营颜色，不留下绿色敌军血条")
+    root:RemoveChild(field)
+    field:Destroy()
+end
+
+-- 判定矩阵不影响真实验收局；使用真实 Sim/Grid/CanBuild/Perform，无替换或 mock。
+local function BuildDecisionMatrix()
+    local isolated=Simulation.New()
+    require("Frontier.ReferenceLayout").Apply(isolated)
+    isolated.gold=4000
+    local function Decide(kind,x,y,expected,label)
+        local count,gold,version,nextId=#isolated.grid.buildings,isolated.gold,isolated.grid.version,isolated.grid.nextId
+        local snapshot,notice,noticeTime=Snapshot(isolated),isolated.notice,isolated.noticeTime
+        local can,reason=isolated:CanBuild(kind,x,y)
+        assert(can==expected and type(reason)=="string" and #reason>0,
+            "[第二轮验收失败] CanBuild 判定错误："..label)
+        assert(Snapshot(isolated)==snapshot and isolated.notice==notice and isolated.noticeTime==noticeTime
+            and isolated.grid.version==version and isolated.grid.nextId==nextId and #isolated.grid.buildings==count,
+            "[第二轮验收失败] CanBuild 查询修改了核心状态："..label)
+        local performed=isolated:Perform(kind,x,y)
+        assert(performed==can, "[第二轮验收失败] CanBuild 与 Perform 判定不一致："..label)
+        if can then
+            local cell=isolated.grid:Get(x,y)
+            local b=cell and isolated.grid:FindBuilding(cell.building)
+            assert(b and b.kind==kind and b.x==x and b.y==y and #isolated.grid.buildings==count+1
+                and isolated.grid.nextId==nextId+1 and isolated.grid.version>version
+                and Near(isolated.gold,gold-C.buildings[kind].cost),
+                "[第二轮验收失败] Perform 成功却未实际落地/扣费："..label)
+        else
+            assert(#isolated.grid.buildings==count and isolated.gold==gold
+                and isolated.grid.version==version and isolated.grid.nextId==nextId
+                and isolated.notice==reason and Snapshot(isolated)==snapshot,
+                "[第二轮验收失败] Perform 拒绝却改变建造状态/资金："..label)
+        end
+        Check(true,"CanBuild/Perform 一致且查询无副作用："..label)
+    end
+    Decide("warehouse",1,1,false,"总部占格")
+    Decide("warehouse",20,1,false,"真实资源占格")
+    Decide("warehouse",9,2,false,"已有建筑占格")
+    Decide("warehouse",C.wildMinX,C.gateTop,false,"城外")
+    Decide("tower",C.wallCol,C.gateTop,false,"墓门")
+    Decide("tower",2,1,false,"箭塔不能建在营地")
+    Decide("stable",C.campMaxX,C.rows,false,"多格建筑越界")
+    Decide("warehouse",0,4,false,"网格外")
+    Decide("warehouse",1.5,4,false,"非整格")
+    Decide("unknown",1,4,false,"未知 kind")
+    assert(isolated.grid:CanPlace("warehouse",7,5), "[第二轮验收失败] 农夫占格测试被静态障碍掩盖")
+    Decide("warehouse",7,5,false,"实际农夫占格不再绿色 valid")
+    for _,kind in ipairs(C.buildOrder) do
+        local x,y=1,1 ---@type number, number
+        if kind=="tower" then x,y=C.wallCol,1 else x,y=EmptySpot(isolated,kind) end
+        Decide(kind,x,y,true,"资金充足空位 "..kind)
+        Decide(kind,x,y,false,"重复占格 "..kind)
+    end
+    local x,y=EmptySpot(isolated,"warehouse")
+    isolated.gold=C.buildings.warehouse.cost-1
+    Decide("warehouse",x,y,false,"资金不足")
+    isolated.gold=C.buildings.warehouse.cost
+    Decide("warehouse",x,y,true,"资金恰好支付")
+    x,y=EmptySpot(isolated,"warehouse")
+    isolated.gold=4000
+    -- footprint [x-.5,x+.5]；size=1 半径 .42。+ .90 擦边重叠；+ .94 已分离。
+    -- 检测农夫 → 阻止建造，不能因不参与战斗而放行。
+    local farmer=isolated:AddUnit("farmer","ally",x+.90,y)
+    Decide("warehouse",x,y,false,"农夫非中心擦边重叠")
+    farmer.x=x+.94
+    Decide("warehouse",x,y,true,"农夫刚分离的边界空位")
+    for _,phase in ipairs({"victory","defeat"}) do
+        isolated.phase=phase -- 仅隔离判定输入；真实结算仍由原局自然战斗得到。
+        Decide("warehouse",1,4,false,phase.." 禁止建造")
+    end
+    Check(isolated.time==0 and isolated.produced==0 and isolated.converted==0 and isolated.harvested==0,
+        "隔离判定矩阵没有推进生产、加工、采集或伪造真实结算")
 end
 
 -- 暂停键经过 main 的真实事件处理器；VariantMap 是引擎事件数据，不是 mock。
@@ -294,13 +532,13 @@ end
 local function BuildChecks(root, field)
     local sim=field.sim
     sim.gold=4000 -- 仅本验收实例；重开须恢复 C.startGold。
-    local toolbarKinds={"inspect","barracks","shield","forge","warehouse","farmerBarracks"}
+    local toolbarKinds={"inspect","barracks","shield","forge","stable","farmerBarracks"}
     for i,kind in ipairs(toolbarKinds) do
         Click(Find(root,"slot_"..i))
         assert(field.tool==kind and not Find(root,"buildMenu"):IsVisible(),
             "[第二轮验收失败] 工具栏回调选错工具")
     end
-    Check(true, "六个实际工具栏按钮分别选择检查/兵营/盾/锻/仓库/农场")
+    Check(true, "六个实际工具栏按钮分别选择检查/兵营/盾/锻/马厩/农场")
     for i=7,9 do
         Click(Find(root,"slot_"..i))
         assert(Find(root,"buildMenu"):IsVisible(), "[第二轮验收失败] 加号未打开建筑清单")
@@ -332,6 +570,38 @@ local function BuildChecks(root, field)
         local count,balance=#sim.grid.buildings,sim.gold
         Point(field,x,y)
         Check(#sim.grid.buildings==count and sim.gold==balance, kind .. "：重复点击占地不会叠建/扣款")
+        if kind=="barracks" then
+            assert(b, "[第二轮验收失败] 新增兵营实体丢失")
+            Click(Find(root,"slot_1"))
+            Point(field,b.x+1,b.y+1)
+            BuildingNotice(root,sim,kind)
+            Click(Find(root,"slot_7"))
+            ClickText(root,"buildMenu","拆除建筑")
+            assert(field.tool=="demolish" and not Find(root,"buildMenu"):IsVisible(),
+                "[第二轮验收失败] 拆除菜单未选择实际工具")
+            local id,version=b.id,sim.grid.version
+            Point(field,b.x+1,b.y+1)
+            Check(#sim.grid.buildings==count-1 and not sim.grid:FindBuilding(id)
+                and sim.grid.version>version and Near(sim.gold,balance+math.floor(C.buildings[kind].cost*C.refundRatio)),
+                "新增兵营：拆除原菜单/指针回调移除正确实体，按正式 refundRatio 恢复退款")
+            for dy=0,C.buildings[kind].h-1 do
+                for dx=0,C.buildings[kind].w-1 do
+                    local freed=sim.grid:Get(b.x+dx,b.y+dy)
+                    assert(freed and freed.building==0 and not freed.solid,
+                        "[第二轮验收失败] 拆除未释放完整占地/通行")
+                end
+            end
+            assert(sim:CanBuild(kind,x,y), "[第二轮验收失败] 拆除后原地仍不可建造")
+            local refundGold=sim.gold
+            SelectMenu(root,kind)
+            Point(field,x,y)
+            local rebuiltCell=sim.grid:Get(x,y)
+            local rebuilt=rebuiltCell and sim.grid:FindBuilding(rebuiltCell.building)
+            Check(rebuilt~=nil and rebuilt.id~=id and rebuilt.kind==kind and #sim.grid.buildings==count
+                and Near(sim.gold,refundGold-C.buildings[kind].cost),
+                "拆除后原地通过真实指针重新建造并重新扣费，没有复活旧实体/重复退款")
+            Footprints(sim)
+        end
     end
     SelectMenu(root,"warehouse")
     local blocked={{x=1,y=1},{x=C.wildMinX,y=C.gateTop}}
@@ -341,8 +611,21 @@ local function BuildChecks(root, field)
             blocked[#blocked+1]={x=u.x,y=u.y}; break
         end
     end
+    assert(sim.grid:CanPlace("warehouse",7,5) and UnitOverlaps(sim,"warehouse",7,5),
+        "[第二轮验收失败] 实际农夫占格用例未形成静态可建/动态占用条件")
+    Point(field,7,5,true)
+    local hoverX,hoverY=field:Project(7,5)
+    field:OnPointerMove(UI.PointerEvent.new(UI.PointerEvent.Types.PointerMove, {
+        x=hoverX,y=hoverY,buttons=UI.PointerEvent.Buttons.None,
+        pointerType=UI.PointerEvent.PointerTypes.Mouse,target=field,
+    }))
+    local valid,reason=sim:CanBuild(field.tool,field.hoverX,field.hoverY)
+    Check(field.tool=="warehouse" and field.hoverX==7 and field.hoverY==5 and not valid
+        and reason=="有亡灵正在经过，请等待空位",
+        "真实农夫占格：RenderPreview 使用的 CanBuild 返回 false，不能再作为绿色 valid")
     for _,p in ipairs(blocked) do
         local before,gold=#sim.grid.buildings,sim.gold
+        Check(not sim:CanBuild("warehouse",p.x,p.y), "实际指针拒绝点预览判定为不可建造")
         Point(field,p.x,p.y)
         assert(#sim.grid.buildings==before and sim.gold==gold,
             "[第二轮验收失败] 总部/资源/城外/单位占格误建造")
@@ -374,6 +657,9 @@ function Start()
     local sim=field.sim
     ReferenceState(sim,"开场")
     Geometry(field)
+    BuildingGeometry(root,field)
+    UnitArtwork(root)
+    BuildDecisionMatrix()
     BuildChecks(root,field)
     HelpPause(root,sim)
 
@@ -391,14 +677,14 @@ function Start()
 
     -- 保留资源实体引用，即使随后枯竭移除仍能核对库存守恒，不凭金币增长冒充采集。
     local resources={}
-    local initialBudget=0
+    local initialBudget=0 ---@type number
     for _,r in ipairs(sim.grid.resources) do
         resources[#resources+1]=r
         initialBudget=initialBudget+r.maxStock*C.resources[r.kind].value
     end
     Check(Until(sim,55,function() return sim.harvested>0 and sim.converted>0 and sim.commandTimer==0 end),
         "真实农夫完成采集运输卸货，士兵自然经过工序获得加工，未直接调用加工/发奖")
-    local remaining,carried,processed=0,0,0
+    local remaining,carried,processed=0,0,0 ---@type number, number, number
     for _,r in ipairs(resources) do remaining=remaining+r.stock*C.resources[r.kind].value end
     for _,u in ipairs(sim.units) do if u.worker then carried=carried+u.carry end end
     for _,b in ipairs(sim.grid.buildings) do processed=processed+b.processed end
@@ -429,6 +715,7 @@ function Start()
         "重开原回调重置实际模拟且复用原 UI/战场，清空结算、加工与战斗残留")
     ReferenceState(sim,"重开")
     Geometry(field)
+    BuildingGeometry(root,field)
 
     -- 截图阶段恢复原参考布局与正式初始资金，全部角色仍靠真实 AI 行军/采集/战斗。
     Click(Find(root,"skull_1"))

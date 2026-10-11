@@ -71,6 +71,7 @@ function HandleFrontierKey(eventType, eventData)
     elseif key==KEY_TAB then sim.speed=sim.speed==1 and 2 or sim.speed==2 and 3 or 1
     elseif key==KEY_ESCAPE then
         if hud.helpOpen then hud:Help(false) end
+        hud:Menu(false)
         hud:Select("inspect")
     elseif key==KEY_H then hud:Help(not hud.helpOpen) end
 end

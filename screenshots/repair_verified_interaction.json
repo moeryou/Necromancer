@@ -1,0 +1,132 @@
+{
+    "version": 2,
+    "script": "Frontier/VisualCheck.lua",
+    "result": "FAIL",
+    "duration_ms": 32950,
+    "frames_completed": 240,
+    "phases": {
+        "load": {
+            "result": "PASS",
+            "errors": []
+        },
+        "init": {
+            "result": "PASS",
+            "errors": []
+        },
+        "run": {
+            "result": "FAIL",
+            "errors": [
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 151.471ms (threshold: 100ms)",
+                    "frame": 2
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 126.716ms (threshold: 100ms)",
+                    "frame": 45
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 990.564ms (threshold: 100ms)",
+                    "frame": 219
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 13954.1ms (threshold: 100ms)",
+                    "frame": 222
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 211.927ms (threshold: 100ms)",
+                    "frame": 225
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 399.644ms (threshold: 100ms)",
+                    "frame": 228
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 142.125ms (threshold: 100ms)",
+                    "frame": 230
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 333.264ms (threshold: 100ms)",
+                    "frame": 233
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 175.352ms (threshold: 100ms)",
+                    "frame": 236
+                },
+                {
+                    "category": "engine",
+                    "message": "Frame time spike: 149.525ms (threshold: 100ms)",
+                    "frame": 238
+                }
+            ]
+        },
+        "scene": {
+            "result": "PASS",
+            "errors": [],
+            "node_count": 0,
+            "component_count": 0,
+            "scene_exists": false
+        }
+    },
+    "state_snapshots": [
+        {
+            "frame": 1,
+            "phase": "init",
+            "nodes": 0,
+            "components": 0,
+            "hash": 0,
+            "frame_time_ms": 10536.1943359375
+        },
+        {
+            "frame": 10,
+            "phase": "run",
+            "nodes": 0,
+            "components": 0,
+            "hash": 0,
+            "frame_time_ms": 16.604999542236329
+        },
+        {
+            "frame": 120,
+            "phase": "run",
+            "nodes": 0,
+            "components": 0,
+            "hash": 0,
+            "frame_time_ms": 17.415000915527345
+        },
+        {
+            "frame": 240,
+            "phase": "run",
+            "nodes": 0,
+            "components": 0,
+            "hash": 0,
+            "frame_time_ms": 18.06800079345703
+        }
+    ],
+    "scene_stalled": true,
+    "max_frame_time_ms": 13954.14453125,
+    "update_defined": false,
+    "component_census": {},
+    "test_result": "NOT_RUN",
+    "test_assertions": {
+        "total": 0,
+        "passed": 0,
+        "failed": 0
+    },
+    "test_issues": [],
+    "missing_resources": [],
+    "missing_engine_resources": [],
+    "summary": {
+        "lua_errors": 0,
+        "resource_errors": 0,
+        "engine_errors": 10,
+        "total_errors": 10
+    }
+}

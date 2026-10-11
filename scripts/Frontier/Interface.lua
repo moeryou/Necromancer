@@ -52,6 +52,7 @@ end
 ---@field lastW number
 ---@field lastH number
 ---@field widgets table<string, any>
+---@field buildButtons table<string, Button>
 local Interface={}
 Interface.__index=Interface
 
@@ -78,6 +79,8 @@ function Interface:Text(id,text)
 end
 function Interface:Select(tool)
     self.tool=tool; self.battlefield:SetTool(tool)
+    if C.buildings[tool] then self.sim:Notify(C.buildings[tool].name.." · "..C.buildings[tool].cost.."灵魂 · 点击绿色占地放置")
+    elseif tool=="inspect" then self.sim:Notify("检查模式：点击建筑查看说明；总部为固定地标") end
     local panel=self:Find("buildMenu")
     if panel then panel:SetVisible(false) end
     self:Update(1)
@@ -91,7 +94,7 @@ end
 function Interface:Create()
     local sim=self.sim
     local slots={}
-    local kinds={"inspect","barracks","shield","forge","warehouse","farmerBarracks"}
+    local kinds={"inspect","barracks","shield","forge","stable","farmerBarracks"}
     local icons={"hq","barracks","coffin","cauldron","hut","pumpkin_farm"}
     for i=1,9 do
         local index=i
@@ -129,10 +132,14 @@ function Interface:Create()
     local skullPanel=UI.Panel {id="skullPanel",position="absolute",width=124,height=50,
         backgroundImage="Reference/ui_skull_panel.png",backgroundFit="stretch",pointerEvents="box-none",children=skulls}
     local menuItems={Label("亡灵建筑",18,P.text,{fontWeight="bold"}),Label("选择建筑后点击营地空地放置",10,P.muted)}
+    local itemButtons={}
     for _,kind in ipairs(C.buildOrder) do
         local k=kind
-        table.insert(menuItems,Button(C.buildings[kind].name.."  ·  "..C.buildings[kind].cost,function() self:Select(k) end,{width="100%",height=34}))
+        local btn=Button(C.buildings[kind].name.."  ·  "..C.buildings[kind].cost,function() self:Select(k) end,{id="build_"..kind,width="100%",height=34})
+        itemButtons[kind]=btn
+        table.insert(menuItems,btn)
     end
+    self.buildButtons=itemButtons
     table.insert(menuItems,Button("拆除建筑",function() self:Select("demolish") end,{width="100%"}))
     table.insert(menuItems,Button("收起",function() self:Menu(false) end,{width="100%"}))
     local menu=UI.Panel {id="buildMenu",visible=false,position="absolute",left=18,bottom=138,width=265,height="70%",
@@ -174,6 +181,7 @@ function Interface:CreateHelp()
         Label("界面位置与素材以参考图为准。建造、采集、自动加工和波次战斗仍由真实模拟驱动。",12,P.muted,{whiteSpace="normal",width="100%"}),
         Label("左下建筑栏",16,P.gold,{fontWeight="bold"}),
         Label("点建筑图标，再点营地空地建造。三个加号打开完整建筑清单；Esc退出建造。",12,P.text,{whiteSpace="normal",width="100%"}),
+        Label("木屋图标对应马厩；仓库在加号清单中。红色预览表示占地、资金或单位经过不允许建造，绿色表示可放置。",12,P.text,{whiteSpace="normal",width="100%"}),
         Label("右上骷髅指令",16,P.gold,{fontWeight="bold"}),
         Label("第一个骷髅：驻守墓门；第二个：全力进攻；第三个：打开说明。金币条显示建造资金，绿液条显示墓墙生命。",12,P.text,{whiteSpace="normal",width="100%"}),
         Label("战斗单位上限5；亡灵农夫不占人口。先发育90秒，或按N提前开波。道路由反复踩踏形成，工坊对邻格经过的士兵自动加工。",12,P.text,{whiteSpace="normal",width="100%"}),
@@ -216,12 +224,14 @@ function Interface:Help(open)
 end
 
 function Interface:Update(dt)
+    self.battlefield:UpdateBars()
     self.timer=self.timer+dt
     if self.timer<.1 then return end
     self.timer=0
     if UI.GetWidth()~=self.lastW or UI.GetHeight()~=self.lastH then self:Layout() end
     local sim=self.sim
-    self:Find("notice"):SetVisible(sim.noticeTime>0 and not self.helpOpen and (self.tool~="inspect" or sim.phase~="develop"))
+    for kind,btn in pairs(self.buildButtons) do btn:SetDisabled(sim.gold<C.buildings[kind].cost) end
+    self:Find("notice"):SetVisible(sim.noticeTime>0 and not self.helpOpen and (self.tool~="inspect" or sim.phase~="develop" or sim.notice:find("检查模式",1,true) or sim.notice:find(" · ",1,true)))
     self:Text("noticeText",sim.notice)
     local goldbar=self:Find("goldbar") --[[@as ProgressBar?]]
     local wallbar=self:Find("wallbar") --[[@as ProgressBar?]]
@@ -229,14 +239,16 @@ function Interface:Update(dt)
     if wallbar then wallbar:SetValue(math.max(0,sim.wallHp/C.wallHealth)) end
     for i=1,6 do
         local btn=self:Find("slot_"..i) --[[@as Button?]]
-        local kinds={"inspect","barracks","shield","forge","warehouse","farmerBarracks"}
+        local kinds={"inspect","barracks","shield","forge","stable","farmerBarracks"}
         local selected=self.tool~="inspect" and self.tool==kinds[i]
-        if btn then btn:SetStyle {borderWidth=selected and 2 or 0,borderColor={186,150,225,255}} end
+        local ending=sim.phase=="victory" or sim.phase=="defeat"
+        if btn then btn:SetStyle {borderWidth=selected and 2 or 0,borderColor={186,150,225,255}}
+            btn:SetDisabled(ending or (C.buildings[kinds[i]] and sim.gold<C.buildings[kinds[i]].cost) or false)
+        end
     end
     local ending=self:Find("end")
     if ending then ending:SetVisible(sim.phase=="victory" or sim.phase=="defeat") end
     self:Text("endTitle",sim.phase=="victory" and "亡灵之夜守住了" or "墓墙已失守")
     self:Text("endStats","击败 "..sim.kills.." · 加工 "..sim.converted.." · 采集 "..math.floor(sim.harvested))
-    self.battlefield:UpdateBars()
 end
 return Interface
