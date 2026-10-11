@@ -17,6 +17,10 @@ local C = require "Frontier.Config"
 ---@field timer number
 ---@field processed number
 ---@field shot number
+---@field visualX? number
+---@field visualY? number
+---@field visualW? number
+---@field visualH? number
 
 ---@class FrontierResource
 ---@field id number

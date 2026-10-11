@@ -22,6 +22,7 @@ function Start()
         } } },
     })
     sim = Simulation.New()
+    require("Frontier.ReferenceLayout").Apply(sim)
     hud = Interface.New(sim)
     SubscribeToEvent("Update", "HandleFrontierUpdate")
     SubscribeToEvent("KeyDown", "HandleFrontierKey")
@@ -60,9 +61,16 @@ end
 function HandleFrontierKey(eventType, eventData)
     if not sim or not hud then return end
     local key=eventData:GetInt("Key")
+    if hud.helpOpen and key~=KEY_H and key~=KEY_ESCAPE then return end
     if key==KEY_SPACE then sim.paused=not sim.paused
     elseif key==KEY_1 then sim:SetCommand("defend")
     elseif key==KEY_2 then sim:SetCommand("attack")
-    elseif key==KEY_ESCAPE then hud:Select("inspect")
+    elseif key==KEY_N then sim:StartWave(true)
+    elseif key==KEY_B then hud:Menu(true)
+    elseif key==KEY_X then hud:Select("demolish")
+    elseif key==KEY_TAB then sim.speed=sim.speed==1 and 2 or sim.speed==2 and 3 or 1
+    elseif key==KEY_ESCAPE then
+        if hud.helpOpen then hud:Help(false) end
+        hud:Select("inspect")
     elseif key==KEY_H then hud:Help(not hud.helpOpen) end
 end

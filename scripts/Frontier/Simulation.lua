@@ -52,6 +52,7 @@ local Grid = require "Frontier.Grid"
 ---@field moving boolean
 ---@field flash number
 ---@field active boolean
+---@field assembling? boolean -- 集结展示：存活实体计入人口，但不参与战斗/移动/目标选择。
 -- 农民专用
 ---@field worker boolean
 ---@field task string
@@ -162,9 +163,11 @@ function Sim:Notify(text)
 end
 
 function Sim:Active(u)
-    return u.active and u.hp > 0
+    return u.active and u.hp > 0 and not u.assembling
 end
 
+-- 人口统计的是存活实体（含尚未投入战斗的集结单位），不是 Active 战斗单位。
+-- 集结敌军计入 EnemyCount，不占 ArmyCount；开波只改变战斗状态，不重复增加人口。
 function Sim:ArmyCount()
     return self.allyCount
 end
@@ -389,14 +392,41 @@ function Sim:StartWave(early)
     self.waveQueue = {}
     -- 波次规模：原 8+wave*5 到第 3 波就有 23 个敌人，与我方 5 人上限严重失衡。
     -- 收敛到 7+wave*4 后，城墙会真正承压，但不会出现"打不完也打不死"的僵持。
-    for i = 1, 7 + self.wave * 4 do
+    local waveSize = 7 + self.wave * 4
+    for i = 1, waveSize do
         local kind = "raider"
         if i % 5 == 0 then kind = "brute"
         elseif i % 4 == 0 then kind = "shooter" end
         table.insert(self.waveQueue, kind)
     end
+    -- 参考布局预先 AddUnit 的首波敌军是真实单位，不是额外的一批。
+    -- 每解除一名存活集结敌军，就扣掉队列里同 kind 的一个名额；未匹配的
+    -- 单位继续集结，避免布局种类/数量错误时偷偷增加本波兵力。
+    local released = 0
+    if self.wave == 1 then
+        for _, u in ipairs(self.units) do
+            if u.team == "enemy" and u.assembling and u.active and u.hp > 0 then
+                local matched = false
+                for i, kind in ipairs(self.waveQueue) do
+                    if kind == u.kind then
+                        table.remove(self.waveQueue, i)
+                        u.assembling, u.state, u.moving = false, "行军", false
+                        u.path, u.repath = {}, 0
+                        released = released + 1
+                        matched = true
+                        break
+                    end
+                end
+                if not matched then
+                    print("[波次] 集结单位" .. u.id .. "（" .. u.kind .. "）无本波名额，继续待命")
+                end
+            end
+        end
+        self:RefreshCounts()
+    end
     self.commandVersion = self.commandVersion + 1
-    print("[波次] 普通波次 " .. self.wave .. "，敌军总量 " .. #self.waveQueue)
+    print("[波次] 普通波次 " .. self.wave .. "，敌军总量 " .. waveSize
+        .. "（集结投入 " .. released .. "，待生成 " .. #self.waveQueue .. "）")
 end
 
 function Sim:StartBoss()
@@ -454,6 +484,7 @@ function Sim:Damage(target, amount)
 end
 
 function Sim:Attack(u, target)
+    if u.assembling or target.assembling then return end
     local t = u.stats
     if u.cooldown > 0 then return end
     u.cooldown = t.interval
@@ -481,13 +512,14 @@ function Sim:Attack(u, target)
 end
 
 function Sim:Target(u)
+    if u.assembling then return nil end
     local t = u.stats
     local best = nil ---@type FrontierUnit?
     local bestScore = math.huge
     local sight2 = t.sight * t.sight
     for _, v in ipairs(self.units) do
         -- 农民不参战、也不被选为目标。
-        if v.active and v.hp > 0 and v.team ~= u.team and not v.worker
+        if self:Active(v) and v.team ~= u.team and not v.worker
             and (v.x - u.x)^2 + (v.y - u.y)^2 <= sight2 then
             local dx, dy = v.x - u.x, v.y - u.y
             local dist = math.sqrt(dx * dx + dy * dy)
@@ -532,7 +564,7 @@ function Sim:PositionClear(u, x, y, passAllies)
         end
     end
     for _, other in ipairs(self.units) do
-        if other ~= u and other.active and other.hp > 0 then
+        if other ~= u and self:Active(other) then
             -- 农民之间互相穿行：采集单位不是战斗单位，挤在一起只会互相堵死，
             -- 允许重叠对玩法毫无影响，却能根除采集路线的死锁。
             -- 战斗单位之间仍严格实心，保持阵型与碰撞手感。
@@ -606,7 +638,7 @@ end
 function Sim:CrowdDensity(x, y, u, radius)
     local count, r2 = 0, radius * radius
     for _, v in ipairs(self.units) do
-        if v ~= u and v.active and v.hp > 0 then
+        if v ~= u and self:Active(v) then
             if (v.x - x)^2 + (v.y - y)^2 < r2 then count = count + 1 end
         end
     end
@@ -629,6 +661,7 @@ function Sim:NeedsRepath(u, gx, gy, size, allowExpensive)
 end
 
 function Sim:Move(u, tx, ty, dt)
+    if u.assembling then return end
     local t = u.stats
     local offset = (u.size - 1) * 0.5
     tx = math.max(1 + offset, math.min(C.cols - offset, tx))
@@ -1018,6 +1051,7 @@ function Sim:AllyGoal(u, dt)
 end
 
 function Sim:Combat(u, target, dt)
+    if u.assembling or target.assembling then return end
     local t = u.stats
     local dx, dy = target.x-u.x, target.y-u.y
     local dist = math.sqrt(dx*dx+dy*dy)
@@ -1053,7 +1087,7 @@ function Sim:Combat(u, target, dt)
 end
 
 function Sim:EnemyGoal(u, dt)
-    if self.phase == "victory" or self.phase == "defeat" then return end
+    if u.assembling or self.phase == "victory" or self.phase == "defeat" then return end
     local t = u.stats
     local desiredX = C.wallCol + 0.8 + (u.size - 1) * 0.5
     if u.x <= desiredX + t.range * 0.2 then
@@ -1219,7 +1253,9 @@ function Sim:Step(dt)
     self:GateStep()
     self.blockedCount = 0
     for _, u in ipairs(self.units) do
-        if self:Active(u) then
+        if u.assembling and u.active and u.hp > 0 then
+            u.state, u.moving = "集结待命", false
+        elseif self:Active(u) then
             u.cooldown, u.repath = math.max(0, u.cooldown-dt), math.max(0, u.repath-dt)
             u.flash, u.moving = math.max(0, u.flash-dt), false
             if u.worker then

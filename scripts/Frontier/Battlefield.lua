@@ -1,280 +1,274 @@
+-- 全屏战场：以参考图1568×882为设计画布；世界坐标与UI共享同一等比映射。
 local UI = require "urhox-libs/UI"
 local C = require "Frontier.Config"
 local Art = require "Frontier.Artwork"
 
 ---@class FrontierBattlefield : Widget
 ---@field sim FrontierSim
----@field zoom number
----@field tile number
----@field originX number
----@field originY number
 ---@field tool string
 ---@field hoverX number
 ---@field hoverY number
----@field dragX number
----@field dragY number
+---@field scaleFactor number
+---@field originX number
+---@field originY number
+---@field tile number
+---@field rowStep number
+---@field viewX number
+---@field viewY number
 ---@field dragging boolean
 ---@field dragMoved boolean
+---@field dragX number
+---@field dragY number
+---@field drawOrder table[]
+---@field bars table<number, ProgressBar>
 local Battlefield = UI.Widget:Extend("FrontierBattlefield")
 
--- 单位按 y 排序，制造前后遮挡；提到模块级，避免每帧重新分配比较闭包。
-local function ByDepth(a, b) return a.y < b.y end
+local function ByDepth(a,b) return a.depth<b.depth end
 
 function Battlefield:Init(props)
     props = props or {}
-    props.flexGrow, props.flexBasis, props.flexShrink = 1, 0, 1
-    props.overflow, props.pointerEvents = "hidden", "auto"
-    UI.Widget.Init(self, props)
-    self.sim = props.sim
-    self.zoom, self.tile = 1, 36
-    self.originX, self.originY = 0, 0
-    self.tool, self.hoverX, self.hoverY = "inspect", 0, 0
-    self.dragX, self.dragY = 0, 0
-    self.dragging, self.dragMoved = false, false
-    self.drawOrder = {} ---@type FrontierUnit[]
-    self.groundBands, self.groundKey = nil, -1
+    props.width,props.height="100%","100%"
+    props.overflow,props.pointerEvents="hidden","auto"
+    UI.Widget.Init(self,props)
+    self.sim=props.sim
+    self.tool,self.hoverX,self.hoverY="inspect",0,0
+    self.tile,self.rowStep,self.scaleFactor=40,54,1
+    self.originX,self.originY,self.viewX,self.viewY=25,85,0,0
+    self.dragX,self.dragY=0,0
+    self.dragging,self.dragMoved=false,false
+    self.drawOrder={}
+    self.bars={} ---@type table<number, ProgressBar>
 end
 
--- 整张地图缩放到视口内：不再有横向卷动，一屏看完全场。
 function Battlefield:UpdateGeometry()
-    local l = self:GetAbsoluteLayout()
-    local marginX, marginY = 14, 22
-    self.tile = math.max(4, math.min((l.w - marginX * 2) / C.cols, (l.h - marginY * 2) / C.rows)) * self.zoom
-    self.originX = l.x + (l.w - C.cols * self.tile) * 0.5
-    self.originY = l.y + (l.h - C.rows * self.tile) * 0.5
+    local l=self:GetAbsoluteLayout()
+    self.scaleFactor=math.min(l.w/1568,l.h/882)
+    self.viewX=l.x+(l.w-1568*self.scaleFactor)*.5
+    self.viewY=l.y+(l.h-882*self.scaleFactor)*.5
+    self.originX,self.originY=self.viewX+25*self.scaleFactor,self.viewY+85*self.scaleFactor
+    self.tile,self.rowStep=40*self.scaleFactor,54*self.scaleFactor
 end
 
-function Battlefield:WorldPoint(x, y)
+local rowEdges={85,159,233,307,380,409,438,467,525,583,641,699,757}
+
+function Battlefield:DesignPoint(x,y)
+    local px=x<=23.5 and 25+(x-.5)*40 or 945+(x-23.5)*62.3
+    local t=math.max(0,math.min(12,y-.5))
+    local i=math.min(12,math.floor(t)+1)
+    return px,rowEdges[i]+(t-i+1)*(rowEdges[i+1]-rowEdges[i])
+end
+
+function Battlefield:Project(x,y)
+    local px,py=self:DesignPoint(x,y)
+    return self.viewX+px*self.scaleFactor,self.viewY+py*self.scaleFactor
+end
+
+function Battlefield:WorldPoint(x,y)
     self:UpdateGeometry()
-    return math.floor((x-self.originX)/self.tile)+1, math.floor((y-self.originY)/self.tile)+1
+    local px,py=(x-self.viewX)/self.scaleFactor,(y-self.viewY)/self.scaleFactor
+    local col=px<945 and math.floor((px-25)/40)+1 or 24+math.floor((px-945)/62.3)
+    local row=0
+    for i=1,12 do if py>=rowEdges[i] and py<rowEdges[i+1] then row=i; break end end
+    return col,row
 end
 
-function Battlefield:SetTool(tool)
-    -- Widget 的透明属性路由会调用同名 setter，内部字段必须 rawset。
-    rawset(self, "tool", tool)
-end
-
-function Battlefield:Pan(amount)
-    -- 整图铺满视口后不再需要横向卷动，保留空实现兼容旧调用。
-end
-
-function Battlefield:OnWheel(dx, dy)
-end
+function Battlefield:SetTool(tool) rawset(self,"tool",tool) end
+function Battlefield:Pan(amount) end
+function Battlefield:OnWheel(dx,dy) end
 
 function Battlefield:OnPointerDown(event)
-    if not event:IsPrimaryButton() and event.pointerType ~= "touch" then return end
-    self.dragging, self.dragMoved = true, false
-    self.dragX, self.dragY = event.x, event.y
-    self.hoverX, self.hoverY = self:WorldPoint(event.x,event.y)
-    -- 地形不可编辑：点击只用于浏览和放置建筑。
+    if not event:IsPrimaryButton() and event.pointerType~="touch" then return end
+    self.dragging,self.dragMoved=true,false
+    self.dragX,self.dragY=event.x,event.y
+    self.hoverX,self.hoverY=self:WorldPoint(event.x,event.y)
     event:StopPropagation()
 end
 
 function Battlefield:OnPointerMove(event)
-    self.hoverX, self.hoverY = self:WorldPoint(event.x,event.y)
-    -- 整图铺满后不再平移，但拖拽仍要与点击区分：拖动过就不算放置建筑。
-    if self.dragging then
-        if math.abs(event.x-self.dragX)+math.abs(event.y-self.dragY)>6 then self.dragMoved = true end
-    end
+    self.hoverX,self.hoverY=self:WorldPoint(event.x,event.y)
+    if self.dragging and math.abs(event.x-self.dragX)+math.abs(event.y-self.dragY)>7 then self.dragMoved=true end
 end
 
 function Battlefield:OnPointerUp(event)
     if self.dragging and not self.dragMoved then
-        local x,y = self:WorldPoint(event.x,event.y)
-        if self.tool == "demolish" then
-            -- 拆除模式：点击建筑返还 50% 资源。
-            self.sim:Demolish(x,y)
-        elseif C.buildings[self.tool] then
-            self.sim:Perform(self.tool,x,y)
-        else
-            local cell = self.sim.grid:Get(x,y)
-            if cell and cell.building>0 then
-                local b = self.sim.grid:FindBuilding(cell.building)
-                if b then
-                    local def = C.buildings[b.kind]
-                    self.sim:Notify(def.name .. " · " .. def.description .. (def.processed and (" · 已加工 " .. b.processed .. " 次") or ""))
+        local x,y=self:WorldPoint(event.x,event.y)
+        if self.tool=="inspect" or self.tool=="demolish" then
+            local px,py=(event.x-self.viewX)/self.scaleFactor,(event.y-self.viewY)/self.scaleFactor
+            local pickedDepth=-math.huge
+            for _,b in ipairs(self.sim.grid.buildings) do
+                local bx,by,bw,bh=self:BuildingRect(b)
+                if px>=bx and px<=bx+bw and py>=by and py<=by+bh and by+bh>pickedDepth then
+                    x,y,pickedDepth=b.x,b.y,by+bh
                 end
             end
         end
-    end
-    self.dragging = false
-end
-
-function Battlefield:OnPointerCancel(event)
-    self.dragging = false
-end
-
-function Battlefield:OnPointerLeave(event)
-    self.hoverX,self.hoverY = 0,0
-end
-
--- 地面棋盘：4 种色块各归并成一条 path，一次填充。
--- 棋盘只由 (列,行) 奇偶决定，与踩踏/建筑无关，因此仅随缩放重建。
-function Battlefield:DrawGround(vg, s, ox, oy, pal)
-    local key = math.floor(s * 10)
-    if self.groundKey ~= key or not self.groundBands then
-        local bands = {
-            { pal.grassIn, {} }, { pal.grassIn2, {} }, { pal.grassOut, {} }, { pal.grassOut2, {} },
-        }
-        for x = 1, C.cols do
-            for y = 1, C.rows do
-                local inside = x < C.wallCol
-                local even = (x + y) % 2 == 0
-                local band = inside and (even and bands[1] or bands[2]) or (even and bands[3] or bands[4])
-                local list = band[2]
-                list[#list + 1] = ox + (x - 1) * s
-                list[#list + 1] = oy + (y - 1) * s
+        if self.tool=="demolish" then self.sim:Demolish(x,y)
+        elseif C.buildings[self.tool] then self.sim:Perform(self.tool,x,y)
+        else
+            local cell=self.sim.grid:Get(x,y)
+            if cell and cell.building>0 then
+                local b=self.sim.grid:FindBuilding(cell.building)
+                if b then self.sim:Notify(C.buildings[b.kind].name.." · "..C.buildings[b.kind].description) end
             end
         end
-        self.groundBands, self.groundKey = bands, key
     end
-    for _, band in ipairs(self.groundBands) do
-        local pts = band[2]
-        if #pts > 0 then
-            nvgBeginPath(vg)
-            for i = 1, #pts, 2 do nvgRect(vg, pts[i], pts[i + 1], s, s) end
-            nvgFillColor(vg, Art.Color(band[1]))
-            nvgFill(vg)
-        end
+    self.dragging=false
+    event:StopPropagation()
+end
+function Battlefield:OnPointerCancel(event) self.dragging=false end
+function Battlefield:OnPointerLeave(event) self.hoverX,self.hoverY=0,0 end
+
+function Battlefield:BuildingRect(b)
+    if b.visualX and b.visualY and b.visualW and b.visualH then
+        return b.visualX,b.visualY,b.visualW,b.visualH
     end
+    local d=C.buildings[b.kind]
+    local x,y=self:Project(b.x+d.w*.5-.5,b.y+d.h*.5-.5)
+    -- 建筑高于地面占地，脚点贴合原图；上部轮廓不改变碰撞网格。
+    local w=math.max(d.w*40+42,100)
+    local h=math.max(d.h*54+35,110)
+    if b.kind=="barracks" then w,h=166,166
+    elseif b.kind=="farmerBarracks" then w,h=178,152
+    elseif b.kind=="forge" then w,h=180,168
+    elseif b.kind=="shield" then w,h=140,178
+    elseif b.kind=="bow" then w,h=238,175
+    elseif b.kind=="warehouse" then w,h=130,155
+    elseif b.kind=="stable" then w,h=198,153 end
+    return x/self.scaleFactor-self.viewX/self.scaleFactor-w*.5,
+        y/self.scaleFactor-self.viewY/self.scaleFactor-h+55,w,h
 end
 
--- 路线不再绘制：实线/虚线压在战场上会与单位、道路纹理互相干扰，观感很差。
--- 这里只保留"路径被堵死"的红色警示，那才是玩家必须看见的信息。
-function Battlefield:DrawRoute(vg, s, ox, oy)
-    local sim = self.sim
-    -- 路径阻断提示：在被堵死的产兵建筑上方画红色警示。
-    for _, b in ipairs(sim.grid.buildings) do
-        local def = C.buildings[b.kind]
-        if def.unit and sim.pathBlocked > 0 then
-            local spots = sim.grid:SpawnSpot(b, C.units[def.unit].size)
-            if #spots == 0 then
-                local cx, cy = ox + (b.x + def.w * 0.5 - 0.5) * s, oy + (b.y - 0.6) * s
-                Art.Circle(vg, cx, cy, s * 0.32, { 224, 92, 78, 235 }, Art.palette.outline, 1.5)
-                Art.Line(vg, cx - s * .14, cy, cx + s * .14, cy, { 255, 240, 230, 255 }, 2)
+-- 血条是真实UI.ProgressBar子控件，图形层只负责角色和背景。
+function Battlefield:UpdateBars()
+    self:UpdateGeometry()
+    local l=self:GetAbsoluteLayout()
+    local sim=self.sim
+    local seen={}
+    for _,u in ipairs(sim.units) do
+        if sim:Active(u) or (u.assembling and u.active and u.hp>0) then
+            seen[u.id]=true
+            local bar=self.bars[u.id]
+            if not bar then
+                bar=UI.ProgressBar { position="absolute",width=34,height=8,showLabel=false,
+                    borderWidth=2,borderColor={27,20,33,255},borderRadius=4,
+                    backgroundColor={29,23,37,255},fillColor=u.team=="ally" and Art.palette.green or Art.palette.red,
+                    pointerEvents="none" }
+                self.bars[u.id]=bar
+                self:AddChild(bar)
             end
+            local x,y=self:Project(u.x,u.y)
+            local big=u.size==2 or u.kind=="brute"
+            bar:SetStyle { left=x-l.x-17*self.scaleFactor,top=y-l.y-(big and 76 or 57)*self.scaleFactor,
+                width=34*self.scaleFactor,height=8*self.scaleFactor,borderWidth=2*self.scaleFactor }
+            bar:SetValue(math.max(0,u.hp/u.maxHp))
+            bar:SetVisible(x>=l.x and x<=l.x+l.w and y>=l.y+80*self.scaleFactor and y<=l.y+l.h)
         end
+    end
+    for id,bar in pairs(self.bars) do
+        if not seen[id] then self:RemoveChild(bar); self.bars[id]=nil end
     end
 end
 
 function Battlefield:Render(vg)
     self:UpdateGeometry()
-    local l = self:GetAbsoluteLayout()
-    local s,ox,oy = self.tile,self.originX,self.originY
-    nvgSave(vg)
-    nvgIntersectScissor(vg,l.x,l.y,l.w,l.h)
-    local pal = Art.palette
-    Art.Rect(vg,l.x,l.y,l.w,l.h,pal.grassOut)
-    -- 月光渐变：顶部偏亮紫绿（月光洒下），底部沉入深紫，制造夜色纵深。
-    local gradient = nvgLinearGradient(vg,0,l.y,0,l.y+l.h,nvgRGBA(112,140,124,255),nvgRGBA(72,96,104,255))
-    nvgBeginPath(vg); nvgRect(vg,l.x,l.y,l.w,l.h); nvgFillPaint(vg,gradient); nvgFill(vg)
-    local startCol, endCol = 1, C.cols
-    -- 地面按 (列,行,色块) 归并成少量 path：33×12 格从 396 次 fill 降到十几次，
-    -- 这是每帧最大的一笔开销。玩家规则不允许改地形，因此只在内容变化时重算。
-    self:DrawGround(vg,s,ox,oy,pal)
-    -- 地图边缘森林。画在草地之后，否则第 1 行的草地会盖住树干。
-    for x=startCol,endCol do
-        if x%3 == 0 then
-            Art.Tree(vg,ox+(x-.5)*s,oy+s*.15,s*.78)
-            Art.Tree(vg,ox+(x-.1)*s,oy+C.rows*s+s*.95,s*.82)
-        end
-    end
-    -- 草丛、野花、踩踏路面与城墙等覆盖层。
-    for x=startCol,endCol do
-        for y=1,C.rows do
-            local px,py = ox+(x-1)*s,oy+(y-1)*s
-            local cell = self.sim.grid.cells[y][x]
-            local hash = (x*71+y*37)%23
-            if hash<7 and cell.building==0 and cell.trail==0 and cell.resource==0 then
-                local cx,cy=px+s*(.18+hash*.10),py+s*.72
-                Art.GrassTuft(vg,cx,cy,s*.34)
-                if hash<2 then Art.Flower(vg,cx+s*.30,cy-s*.06,s*.30,{ 246,244,236,255 }) end
+    local l=self:GetAbsoluteLayout()
+    local k=self.scaleFactor
+    nvgSave(vg); nvgIntersectScissor(vg,l.x,l.y,l.w,l.h)
+    Art.Rect(vg,l.x,l.y,l.w,l.h,{34,29,45,255})
+    nvgTranslate(vg,self.viewX,self.viewY); nvgScale(vg,k,k)
+    Art.Image(vg,"ground",0,0,1568,882)
+    local sim=self.sim
+    -- 道路仍由真实踩踏升级；仅高等级留下细小石块，避免恢复旧棋盘格。
+    for y=1,C.rows do
+        for x=1,C.wallCol-1 do
+            local cell=sim.grid:Get(x,y)
+            if cell and cell.trail>=2 and cell.building==0 and cell.resource==0 then
+                local px,py=self:DesignPoint(x,y)
+                local color=cell.trail>=3 and {164,145,129,95} or {145,111,76,55}
+                Art.Ellipse(vg,px-7,py-3,5,2,color)
+                Art.Ellipse(vg,px+5,py+3,4,2,color)
             end
-            if cell.trail > 0 then Art.Trail(vg,px,py,s,cell.trail,x*13+y*7)
-            elseif x==C.wallCol and not self.sim.grid:IsGateRow(y) then Art.Wall(vg,px,py,s) end
         end
     end
-    -- 资源点画在地面之后、建筑之前：占格不可通行，是农民的目标。
-    for _,res in ipairs(self.sim.grid.resources) do
-        Art.Resource(vg,res,ox,oy,s)
+    -- 参考图左上角的骷髅总部：营地的不可移动地标，不伪装成可操作建筑。
+    Art.Image(vg,"hq",34,43,293,253)
+    -- 只在选中建造时显露占地与预览，日常战场绝不铺棋盘格。
+    if C.buildings[self.tool] and self.hoverX>=1 and self.hoverX<=C.wallCol and self.hoverY>=1 and self.hoverY<=C.rows then
+        local d=C.buildings[self.tool]
+        local valid=sim.grid:CanPlace(self.tool,self.hoverX,self.hoverY) and sim.gold>=d.cost
+        local px,py=25+(self.hoverX-1)*40,rowEdges[self.hoverY]
+        local height=rowEdges[math.min(13,self.hoverY+d.h)]-py
+        Art.Rect(vg,px,py,d.w*40,height,valid and {126,231,86,48} or {231,71,80,55},5,
+            valid and {170,240,116,200} or {242,85,99,220},2)
+        nvgGlobalAlpha(vg,.5)
+        Art.Building(vg,self.tool,px-20,py-60,d.w*40+42,d.h*54+35,sim.time)
+        nvgGlobalAlpha(vg,1)
     end
-    -- 路线反馈：先画预测虚线（摆放建筑时），再画实际轨迹实线。
-    self:DrawRoute(vg,s,ox,oy)
-    -- 营地边界、城门条纹与行军方向刻线。
-    local wx = ox+(C.wallCol-1)*s
-    Art.Line(vg,ox-2,oy,ox-2,oy+C.rows*s,{ 150,196,124,150 },2)
-    for y=C.gateTop,C.gateTop+C.gateWidth-1 do
-        -- 门道：木板铺面 + 向右的通行箭头
-        local gy = oy+(y-1)*s
-        Art.Rect(vg,wx+s*.06,gy+s*.05,s*.88,s*.9,pal.woodLite,s*.08,pal.outline,s*.05)
-        nvgBeginPath(vg)
-        for i=1,2 do
-            local yy=gy+s*(.05+i*.30)
-            nvgMoveTo(vg,wx+s*.06,yy); nvgLineTo(vg,wx+s*.94,yy)
+    -- 资源点使用参考图的枯树和木材屋旁的木料，储量由原采集系统管理。
+    for _,r in ipairs(sim.grid.resources) do
+        local c=r.cells[1]
+        if c then
+            local px,py=self:DesignPoint(c.x,c.y)
+            local name=r.kind=="forest" and "tree" or "stone"
+            if r.kind=="forest" then Art.Fit(vg,name,px-35,py-80,70,100)
+            else Art.Fit(vg,name,px-27,py-46,54,50) end
         end
-        Art.Stroke(vg,pal.woodDark,s*.05)
-        Art.Polygon(vg,{ wx+s*.30,oy+(y-.68)*s,wx+s*.78,oy+(y-.5)*s,wx+s*.30,oy+(y-.32)*s },
-            { 250,226,158,235 },pal.outline,s*.05)
     end
-    Art.Flag(vg,wx+s*.17,oy+(C.gateTop-1.1)*s,s*.8,{ 226,177,99,255 },self.sim.time)
-    Art.Flag(vg,wx+s*.17,oy+(C.gateTop+C.gateWidth)*s,s*.8,{ 226,177,99,255 },self.sim.time+2)
-    for _,b in ipairs(self.sim.grid.buildings) do
-        local def=C.buildings[b.kind]
-        local progress = def.unit and def.interval>0 and b.timer/def.interval or 0
-        Art.Building(vg,b.kind,ox+(b.x-1)*s,oy+(b.y-1)*s,s,b.processed,progress,self.sim.time)
+    local order=self.drawOrder
+    local count=0
+    for _,b in ipairs(sim.grid.buildings) do
+        count=count+1
+        local item=order[count] or {}; order[count]=item
+        item.depth=b.y+C.buildings[b.kind].h*.5
+        item.building,item.unit=b,nil
     end
-    -- 复用同一个绘制顺序表，避免每帧新建表；比较器提到模块级以免重复闭包分配。
-    local order = self.drawOrder
-    local n = 0
-    for _, u in ipairs(self.sim.units) do
-        if self.sim:Active(u) then n = n + 1; order[n] = u end
+    for _,u in ipairs(sim.units) do
+        if sim:Active(u) or (u.assembling and u.active and u.hp>0) then
+            count=count+1
+            local item=order[count] or {}; order[count]=item
+            item.depth=u.y
+            item.building,item.unit=nil,u
+        end
     end
-    for i = n + 1, #order do order[i] = nil end
-    table.sort(order, ByDepth)
-    for i = 1, n do
-        local u = order[i]
-        Art.Unit(vg,u,ox+(u.x-.5)*s,oy+(u.y-.5)*s,s,self.sim.time)
+    for i=count+1,#order do order[i]=nil end
+    table.sort(order,ByDepth)
+    for i=1,count do
+        local item=order[i]
+        if item.building then
+            local b=item.building
+            local x,y,w,h=self:BuildingRect(b)
+            Art.Building(vg,b.kind,x,y,w,h,sim.time)
+        else
+            local u=item.unit
+            local x,y=self:DesignPoint(u.x,u.y)
+            Art.Unit(vg,u,x,y,sim.time)
+        end
     end
-    for _,p in ipairs(self.sim.shots) do
-        local target=self.sim:FindUnit(p.target)
-        local dx,dy=target and target.x-p.x or 1,target and target.y-p.y or 0
-        local d=math.max(.1,math.sqrt(dx*dx+dy*dy))
-        local x,y=ox+(p.x-.5)*s,oy+(p.y-.5)*s
-        -- 我方弹道=鬼火绿（亡灵魔法），敌方弹道=糖果粉（捣蛋鬼的糖）。
-        Art.Line(vg,x,y,x-dx/d*s*.28,y-dy/d*s*.28,p.team=="ally" and { 196,250,158,255 } or { 240,140,170,255 },1.5)
+    for _,shot in ipairs(sim.shots) do
+        local target=sim:FindUnit(shot.target)
+        if target then
+            local x,y=self:DesignPoint(shot.x,shot.y)
+            local tx,ty=self:DesignPoint(target.x,target.y)
+            local dx,dy=tx-x,ty-y
+            local len=math.max(1,math.sqrt(dx*dx+dy*dy))
+            Art.Line(vg,x,y-14,x-dx/len*14,y-14-dy/len*14,
+                shot.team=="ally" and {189,245,151,255} or {252,180,96,255},2.5)
+        end
     end
-    for _,e in ipairs(self.sim.effects) do
-        local alpha=math.floor(210*e.life/e.maxLife)
-        local x,y=ox+(e.x-.5)*s,oy+(e.y-.5)*s
-        local radius=e.radius*s*(1-e.life/e.maxLife*.5)
-        nvgBeginPath(vg); nvgCircle(vg,x,y,radius)
-        nvgStrokeColor(vg,Art.Color(e.color,alpha)); nvgStrokeWidth(vg,1.5); nvgStroke(vg)
-        if e.kind=="aoe" then Art.Circle(vg,x,y,radius,{ e.color[1],e.color[2],e.color[3],math.floor(alpha*.2) }) end
-    end
-    if self.hoverX>0 and self.hoverY>0 then
-        if self.tool == "demolish" then
-            -- 拆除模式：高亮悬停的建筑（仅当该格确有建筑）。
-            local cell = self.sim.grid:Get(self.hoverX,self.hoverY)
-            if cell and cell.building > 0 then
-                local b = self.sim.grid:FindBuilding(cell.building)
-                if b then
-                    local bd = C.buildings[b.kind]
-                    local x,y=ox+(b.x-1)*s,oy+(b.y-1)*s
-                    Art.Rect(vg,x,y,bd.w*s,bd.h*s,{ 225,117,95,110 },2)
-                    nvgBeginPath(vg); nvgRect(vg,x+1,y+1,bd.w*s-2,bd.h*s-2)
-                    nvgStrokeColor(vg,nvgRGBA(244,138,112,255)); nvgStrokeWidth(vg,2); nvgStroke(vg)
-                end
+    for _,e in ipairs(sim.effects) do
+        local life=e.life/e.maxLife
+        local x,y=self:DesignPoint(e.x,e.y)
+        if e.kind=="hit" then
+            local r=11*(1.3-life*.3)
+            Art.Line(vg,x-r,y-22,x+r,y-8,{255,228,173,math.floor(life*230)},3)
+            Art.Line(vg,x-r,y-8,x+r,y-22,{255,228,173,math.floor(life*230)},3)
+        elseif e.kind=="upgrade" then
+            for j=1,4 do
+                local a=j*math.pi*.5+life
+                Art.Ellipse(vg,x+math.cos(a)*18*(1-life),y-22+math.sin(a)*12*(1-life),2,2,{122,249,168,math.floor(life*220)})
             end
-        elseif C.buildings[self.tool] then
-            local def=C.buildings[self.tool]
-            local w,h=def.w,def.h
-            local valid=self.sim.grid:CanPlace(self.tool,self.hoverX,self.hoverY)
-            local col=valid and { 229,218,163,90 } or { 225,117,95,120 }
-            local x,y=ox+(self.hoverX-1)*s,oy+(self.hoverY-1)*s
-            Art.Rect(vg,x,y,w*s,h*s,col,2)
-            nvgBeginPath(vg); nvgRect(vg,x+1,y+1,w*s-2,h*s-2)
-            nvgStrokeColor(vg,valid and nvgRGBA(243,223,160,255) or nvgRGBA(244,138,112,255))
-            nvgStrokeWidth(vg,2); nvgStroke(vg)
+        else
+            Art.Ellipse(vg,x,y-10,e.radius*25*(1.1-life*.3),e.radius*13,{e.color[1],e.color[2],e.color[3],math.floor(life*45)})
         end
     end
     nvgRestore(vg)
