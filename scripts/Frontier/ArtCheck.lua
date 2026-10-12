@@ -52,13 +52,20 @@ function Start()
         {"militia","ally",{stable=true}}, {"militia","ally",{stable=true,bow=true}},
         {"militia","ally",{stable=true,shield=true,forge=true}},
         {"elephant","ally",{}}, {"boss","enemy",{}},
-        {"farmer","ally",{}}, {"raider","enemy",{}}, {"shooter","enemy",{}},
+        {"brute","enemy",{}}, {"raider","enemy",{}}, {"shooter","enemy",{}},
     }
     local units,children={},{}
     for _,case in ipairs(cases) do
         local u=sim:AddUnit(case[1],case[2],28,9)
         u.gear=case[3]
         units[#units+1]=u
+    end
+    local vg=UI.GetNVGContext()
+    for _,kind in ipairs(C.buildOrder) do
+        assert(Art.Load(vg,Art.BuildingName(kind))>0,"[美术验收失败] 建筑素材缺失："..kind)
+    end
+    for _,u in ipairs(units) do
+        assert(Art.Load(vg,Art.UnitName(u))>0,"[美术验收失败] 角色素材缺失："..u.kind)
     end
     local props={width="100%",height="100%",units=units}
     children[1]=Gallery:new(props --[[@as WidgetProps]])

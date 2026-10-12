@@ -174,6 +174,17 @@ local function ReferenceState(sim, label)
     Check(farmers==8 and army==5 and enemies==11 and assembling==11
         and sim:FarmerCount()==farmers and sim:ArmyCount()==army and sim:EnemyCount()==enemies,
         label .. "：8农夫、5战斗兵、11集结敌军，与存活实体及计数一致")
+    local expectedImages={raider="enemy_raider",brute="enemy_brute",shooter="enemy_shooter"}
+    local kinds={raider=0,brute=0,shooter=0}
+    for _,u in ipairs(sim.units) do
+        if u.team=="enemy" then
+            assert(u.assembling and expectedImages[u.kind] and Art.UnitName(u)==expectedImages[u.kind],
+                "[美术验收失败] 初始右侧敌军图片与真实兵种不一致")
+            kinds[u.kind]=kinds[u.kind]+1
+        end
+    end
+    Check(kinds.raider==7 and kinds.brute==2 and kinds.shooter==2,
+        label.."：右侧7近战、2大块头、2投手分别固定匹配专用敌军贴图")
     Check(sim.phase=="develop" and sim.wave==1 and sim.time==0 and not sim.paused
         and sim.gold==C.startGold and sim.wallHp==C.wallHealth and #sim.waveQueue==0,
         label .. "：正式初始资金/生命/阶段未被验收改写")
@@ -256,11 +267,22 @@ local function BuildingGeometry(root,field)
     for kind in pairs(C.buildings) do
         local name=names[kind]
         assert(name and Art.BuildingName(kind)==name, "[第二轮验收失败] 建筑资源映射错误："..kind)
+        local initialAspect=Art.BuildingAspect(kind)
         local image=Art.Load(vg,name)
         assert(image>0, "[第二轮验收失败] 实际建筑 PNG 加载失败："..kind)
         local iw,ih=nvgImageSize(vg,image)
         local aspect=Art.BuildingAspect(kind)
-        assert(iw>0 and ih>0 and Near(aspect,iw/ih), "[第二轮验收失败] 建筑 aspect 不符原图："..kind)
+        assert(iw>0 and ih>0 and Near(initialAspect,iw/ih) and Near(aspect,iw/ih),
+            "[美术验收失败] 建筑初始化尺寸不符新素材，首次加载会跳动："..kind)
+        local hit=false
+        for row=1,12 do
+            for col=1,12 do
+                if Art.BuildingContains(kind,0,0,100,100,(col-.5)*100/12,(row-.5)*100/12) then hit=true end
+            end
+        end
+        assert(hit and not Art.BuildingContains(kind,0,0,100,100,-1,50)
+            and not Art.BuildingContains(kind,0,0,100,100,50,101),
+            "[美术验收失败] 新建筑点击轮廓为空或越界："..kind)
         for y=1,C.rows-C.buildings[kind].h+1 do
             local x=kind=="tower" and C.wallCol or 1
             local candidate={kind=kind,x=x,y=y}
@@ -342,7 +364,9 @@ local function UnitArtwork(root)
         {kind="militia",team="ally",gear={stable=true,shield=true,forge=true,horn=true},name="mounted",w=200,h=180,ax=109,ay=157,scale=.65},
         {kind="elephant",team="ally",gear={stable=true,bow=true},name="elephant",w=264,h=220,ax=125,ay=184,scale=.5},
         {kind="boss",team="enemy",gear={},name="boss",w=172,h=170,ax=86,ay=143,scale=.75},
-        {kind="raider",team="enemy",gear={},name="hostile_guard",w=84,h=67,ax=42,ay=61,scale=1},
+        {kind="raider",team="enemy",gear={},name="enemy_raider",w=84,h=67,ax=42,ay=61,scale=1},
+        {kind="brute",team="enemy",gear={},name="enemy_brute",w=85,h=78,ax=34,ay=72,scale=1},
+        {kind="shooter",team="enemy",gear={},name="enemy_shooter",w=84,h=70,ax=48,ay=64,scale=1},
     }
     local vg=UI.GetNVGContext()
     local props={sim=isolated,position="absolute",left=0,top=0,pointerEvents="none"}
@@ -358,6 +382,17 @@ local function UnitArtwork(root)
         u.gear=case.gear
         u.hp=u.maxHp*.75
         Check(Art.UnitName(u)==case.name, "隔离表现矩阵 "..i.."："..case.kind.." 装备映射为 "..case.name)
+        if u.team=="enemy" then
+            local id=u.id
+            for variant=1,7 do
+                u.id=id+variant
+                u.assembling=variant%2==0
+                assert(Art.UnitName(u)==case.name,
+                    "[美术验收失败] 敌军贴图随编号或集结状态变化")
+            end
+            u.id,u.assembling=id,false
+            Check(true,case.kind.."：不同编号及集结/开波状态均保持专用敌军图片")
+        end
         local w,h,ax,ay=Art.UnitGeometry(u)
         assert(Near(w,case.w*case.scale) and Near(h,case.h*case.scale)
             and Near(ax,case.ax*case.scale) and Near(ay,case.ay*case.scale),
@@ -522,9 +557,12 @@ local function OpenWave(root, sim)
     Check(Near(sim.gold,gold+math.floor(timeLeft*.65)), "提前开波奖励按实际剩余发育时间结算")
     Check(#enemies==11 and count==11 and assembling==0 and #sim.waveQueue==0 and sim.nextUnit==nextId,
         "11名预集结敌军投入首波并抵扣完整队列，没有生成第二批敌军")
+    local expectedImages={raider="enemy_raider",brute="enemy_brute",shooter="enemy_shooter"}
     for _,u in ipairs(enemies) do
         assert(sim:FindUnit(u.id)==u and sim:Active(u), "[第二轮验收失败] 集结敌军未按原实体投入")
+        assert(Art.UnitName(u)==expectedImages[u.kind], "[美术验收失败] 开波后敌军变成错误图片")
     end
+    Check(true,"首波原实体解除集结后保持兵种专用图片，不切回旧剑士/幽灵图")
 end
 
 ---@param root Widget
